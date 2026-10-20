@@ -1,0 +1,34 @@
+name: Story
+description: A user-facing piece of work with acceptance criteria
+labels: ["type: story"]
+body:
+  - type: textarea
+    id: story
+    attributes:
+      label: Story
+      description: "As <persona> I want <capability> so that <benefit>."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: "Given … when … then … (as a checklist)"
+      value: |
+        - [ ] Given … when … then …
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Technical notes
+      description: Affected crates/modules, relevant ADRs and docs, feature IDs (e.g. R-04).
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of done
+      value: |
+        - [ ] Tests (unit/golden/E2E as applicable) green
+        - [ ] Performance budget met (if relevant), numbers in the PR
+        - [ ] Screenshot/recording in the PR (if UI)
+        - [ ] Docs/ADR updated

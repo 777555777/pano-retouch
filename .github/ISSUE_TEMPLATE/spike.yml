@@ -1,0 +1,29 @@
+name: Spike
+description: Time-boxed technical investigation with throw-away code
+labels: ["type: spike"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What do we need to find out?
+    validations:
+      required: true
+  - type: textarea
+    id: success
+    attributes:
+      label: Success criteria
+      description: How do we know the answer is good enough?
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Approach
+  - type: textarea
+    id: output
+    attributes:
+      label: Expected output
+      value: |
+        - [ ] Short report (findings, numbers, recommendation) as a comment or in `docs/spikes/`
+        - [ ] ADR created/updated

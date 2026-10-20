@@ -1,0 +1,10 @@
+# Local test data (large, private – never publish)
+testdata-local/
+
+# Review screenshots show private test images – keep local, publish notes only
+mockups/**/review/*.png
+mockups/**/review/*.jpg
+mockups/**/review/*.jpeg
+
+# macOS
+.DS_Store
