@@ -143,9 +143,22 @@ Interpretation:
   180 missing tiles) and the slow first view after the decode (base texture of 11–22 MB takes
   120–550 ms to arrive) come from **WebView2's resource/IPC path**, which copies response bodies through
   COM streams. Both Tauri mechanisms use it, so switching between them does not help.
-- The Rust side is also 1.5–7× slower (memory-bound steps like the pyramid and the EXR decode are hit
-  hardest; Windows Defender scanning large files may add to it). Headless `s1-bench` numbers on Windows
-  are still needed to separate CPU/disk from transport.
+- The Rust side is also slower. Headless `s1-bench` (release build, NASM present, 20 threads):
+
+  | | 16-bit TIFF Win / Mac | EXR Win / Mac |
+  | --- | --- | --- |
+  | Full decode | 1567 / 1179 ms | 2785 / 653 ms |
+  | Pyramid | 263 / 46 ms | 424 / 54 ms |
+  | One tile → u8 (single thread) | **2.67 / 0.44 ms** | 3.45 / 0.84 ms |
+  | Cube tile (compute-bound) | 15.5 / 5.2 ms | 16.1 / 4.7 ms |
+  | Cache write | 3447 / 476 ms | 3145 / 664 ms |
+
+  Compute-bound work is ~3× slower (CPU difference), but steps that allocate and touch fresh memory
+  are 6×: the tile path allocates and copies each tile 3–4 times (≈ 1 MB each), and fresh allocations
+  are expensive on Windows (page faults, zeroing). Fix candidates: reuse buffers / avoid the extra
+  copies, a faster allocator (mimalloc), and checking Windows Defender's impact on the cache writes.
+- Memory: Task Manager showed system RAM going from ~16 GB to ~21 GB during the run (app + WebView2 +
+  GPU), i.e. ≈ 5 GB – within budget. CPU at 90 %+ during decoding is expected (all cores in use).
 
 Follow-up (spike S1b, before E1.4): measure alternative transports on Windows – WebView2 **shared
 buffers** (`CreateSharedBuffer` / `PostSharedBufferToScript`, zero-copy, reachable via wry's
@@ -193,7 +206,7 @@ sync. The cube code is removed after the spike.
 ## Not covered / open
 
 - **Windows transport** (see the Windows section) – follow-up spike S1b. Peak RSS is not reported on
-  Windows yet (use Task Manager); headless `s1-bench` numbers on Windows are missing.
+  Windows yet (use Task Manager).
 - **Cold file cache** numbers (see caveat above).
 - **Comparison with Photoshop/Affinity** – maintainer task [#6](https://github.com/777555777/pano-retouch/issues/6).
 - **Colour management**: the viewer shows source values without conversion (ProPhoto/Adobe RGB look
