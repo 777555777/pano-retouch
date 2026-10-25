@@ -483,20 +483,33 @@ pub mod patchmatch {
     /// original full-detail pixel at the matched position – real grain from the surroundings,
     /// arranged along the anchor's structure. `sigma`: blur of the anchor in pixels.
     pub fn texture_refine(img: &Img, hole: &[bool], anchor: &Img, sigma: f32, iters: usize) -> Img {
+        // Only low frequencies are compared, so the search runs at half resolution; each hole pixel then
+        // copies the full-resolution pixel at the same offset (coherent 2×2 blocks of real detail).
         let lp = super::blur(img, sigma);
-        let target = guided(&lp, hole, anchor);
-        let valid = valid_sources(hole, img.w, img.h);
-        let mut field = random_nnf(img.w, img.h, &valid);
+        let (hw, hh) = (img.w.div_ceil(2), img.h.div_ceil(2));
+        let lp_h = lp.resize(hw, hh);
+        let hole_h = super::resize_mask(hole, img.w, img.h, hw, hh);
+        let target = guided(&lp_h, &hole_h, &anchor.resize(hw, hh));
+        let near = super::distance_outside(&hole_h, hw, hh);
+        let valid = valid_sources_near(&near, hw, hh);
+        let mut field = random_nnf(hw, hh, &valid);
         for it in 0..iters {
-            search(&target, hole, &valid, &mut field, 7919 + it as u64);
+            search_with(&target, &near, &valid, &mut field, 7919 + it as u64);
         }
         let mut out = img.clone();
-        for (p, &h) in hole.iter().enumerate() {
-            if h {
-                let (x, y) = field[p];
-                out.px[p] = img.px[y as usize * img.w + x as usize];
+        let (w, h) = (img.w as i32, img.h as i32);
+        out.px.par_chunks_mut(img.w).enumerate().for_each(|(y, row)| {
+            for x in 0..img.w {
+                if !hole[y * img.w + x] {
+                    continue;
+                }
+                let (qx, qy) = ((x / 2).min(hw - 1), (y / 2).min(hh - 1));
+                let (sx, sy) = field[qy * hw + qx];
+                let (dx, dy) = (sx * 2 - qx as i32 * 2, sy * 2 - qy as i32 * 2);
+                let (tx, ty) = ((x as i32 + dx).clamp(0, w - 1), (y as i32 + dy).clamp(0, h - 1));
+                row[x] = img.px[ty as usize * img.w + tx as usize];
             }
-        }
+        });
         out
     }
 
@@ -557,7 +570,10 @@ pub mod patchmatch {
 
     /// Patch centres usable as sources: the whole patch lies in the known region.
     fn valid_sources(m: &[bool], w: usize, h: usize) -> Vec<(i32, i32)> {
-        let d = super::distance_outside(m, w, h);
+        valid_sources_near(&super::distance_outside(m, w, h), w, h)
+    }
+
+    fn valid_sources_near(d: &[f32], w: usize, h: usize) -> Vec<(i32, i32)> {
         let mut v = vec![];
         for y in R..h as i32 - R {
             for x in R..w as i32 - R {
@@ -612,8 +628,13 @@ pub mod patchmatch {
     /// PatchMatch for every patch centre that overlaps the hole (rows in parallel bands; alternating
     /// scan direction per iteration).
     fn search(img: &Img, m: &[bool], valid: &[(i32, i32)], f: &mut [(i32, i32)], seed: u64) {
-        let (w, h) = (img.w as i32, img.h as i32);
         let near = super::distance_outside(m, img.w, img.h);
+        search_with(img, &near, valid, f, seed)
+    }
+
+    /// `near`: distance of every pixel to the hole (precomputed once per level).
+    fn search_with(img: &Img, near: &[f32], valid: &[(i32, i32)], f: &mut [(i32, i32)], seed: u64) {
+        let (w, h) = (img.w as i32, img.h as i32);
         let rev = seed % 2 == 1;
         let band = 32usize;
         let fs: Vec<(i32, i32)> = f.to_vec();
@@ -635,26 +656,30 @@ pub mod patchmatch {
                         let mut bd = dist(img, x, y, best.0, best.1, f32::MAX);
                         let step = if rev { 1 } else { -1 };
                         // propagation from the previous pixel in scan order (x) and row (y)
-                        let mut cands = vec![];
+                        let mut cands = [(0i32, 0i32); 40];
+                        let mut nc = 0;
                         let px = x + step;
                         if px >= 0 && px < w {
                             let c = local[li][px as usize];
-                            cands.push((c.0 - step, c.1));
+                            cands[nc] = (c.0 - step, c.1);
+                            nc += 1;
                         }
                         let pl = li as i32 + step;
                         if pl >= 0 && (pl as usize) < ys.len() {
                             let c = local[pl as usize][x as usize];
-                            cands.push((c.0, c.1 - step));
+                            cands[nc] = (c.0, c.1 - step);
+                            nc += 1;
                         }
                         // random search around the current best
                         let mut rad = w.max(h);
-                        while rad >= 1 {
-                            let c = (best.0 + (rng.below(2 * rad as usize + 1) as i32 - rad), best.1 + (rng.below(2 * rad as usize + 1) as i32 - rad));
-                            cands.push(c);
+                        while rad >= 1 && nc < cands.len() - 1 {
+                            cands[nc] = (best.0 + (rng.below(2 * rad as usize + 1) as i32 - rad), best.1 + (rng.below(2 * rad as usize + 1) as i32 - rad));
+                            nc += 1;
                             rad /= 2;
                         }
-                        cands.push(valid[rng.below(valid.len())]);
-                        for c in cands {
+                        cands[nc] = valid[rng.below(valid.len())];
+                        nc += 1;
+                        for &c in &cands[..nc] {
                             if c.0 < R || c.1 < R || c.0 >= w - R || c.1 >= h - R {
                                 continue;
                             }

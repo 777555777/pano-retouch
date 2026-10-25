@@ -89,7 +89,18 @@ fn main() {
                     info["ep"] = model.used.clone().into();
                     let small = disp.resize(512, 512);
                     let ms512 = inpaint::resize_mask(&fill, n, n, 512, 512);
-                    let (r, t1) = model.run(&small, &ms512)?;
+                    // a GPU provider may only fail when running (e.g. DirectML on LaMa's FFT block) → CPU
+                    let (r, t1) = match model.run(&small, &ms512) {
+                        Ok(r) => r,
+                        Err(e) if provider != Provider::Cpu => {
+                            info["ep_runtime_error"] = e.lines().next().unwrap_or("").chars().take(200).collect::<String>().into();
+                            model = ai::load(&models.join("lama_fp32.onnx"), ModelKind::Lama, Provider::Cpu)?;
+                            info["ep"] = format!("{} → cpu", info["ep"].as_str().unwrap_or("")).into();
+                            info["load_ms_cpu"] = model.load_ms.into();
+                            model.run(&small, &ms512)?
+                        }
+                        Err(e) => return Err(e),
+                    };
                     // a second run shows the warm (cached) inference time
                     let (r, t2) = model.run(&small, &ms512).map(|(_, t2)| (r, t2))?;
                     info["infer_ms_first"] = t1.into();

@@ -99,8 +99,12 @@ pub fn load(path: &std::path::Path, kind: ModelKind, provider: Provider) -> Resu
                             .error_on_failure(),
                     );
                 }
+                // DirectML requires sequential execution and no memory-pattern optimisation
                 #[cfg(windows)]
-                "directml" => eps.push(ort::ep::DirectML::default().build().error_on_failure()),
+                "directml" => {
+                    b = b.with_memory_pattern(false).map_err(err)?.with_parallel_execution(false).map_err(err)?;
+                    eps.push(ort::ep::DirectML::default().build().error_on_failure());
+                }
                 // ort's default device policy registers CoreML on macOS even without asking – opt out
                 "cpu" => b = b.with_auto_device(ort::session::builder::AutoDevicePolicy::PreferCPU).map_err(err)?,
                 other => return Err(format!("{other} not available on this platform")),
