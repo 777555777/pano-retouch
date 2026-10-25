@@ -5,7 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 import { Renderer, Wire } from "./renderer";
 import { Layout, OpenInfo, pct, TileManager, TileOptions } from "./tiles";
 import { available, fetchBatch, fetchBytes, initTransports, Transport } from "./transport";
-import { View } from "./sphere";
+import { basis, rayDir, Vec3, View } from "./sphere";
+import { Brushes, fromYawPitch, rotate, Stroke, Tool } from "./brush";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("view");
@@ -20,6 +21,46 @@ let view: View = { yaw: 0, pitch: 0, fov: 90 * DEG };
 let velocity: View = { yaw: 0, pitch: 0, fov: 0 };
 let lastView: View = { ...view };
 const t0Page = performance.now();
+const brushes = new Brushes();
+let cursor: Vec3 | null = null;
+let painting = false;
+let spaceHeld = false;
+let lastCommitLog = "";
+
+async function commitActive(): Promise<Stroke | null> {
+  if (!info || !tm) return null;
+  const s = await brushes.end(info.session);
+  if (!s || !s.commit || !tm) {
+    if (s?.error) log(`commit failed: ${s.error}`);
+    return s;
+  }
+  s.pending = tm.invalidate(s.commit.dirty, s.commit.version);
+  s.baseDone = false;
+  void loadBase().then(() => (s.baseDone = true));
+  return s;
+}
+
+function strokeReport(s: Stroke): Record<string, number> {
+  const c = s.commit!;
+  return {
+    points: s.dirs.length,
+    rustRaster: +c.ms_raster.toFixed(1),
+    rustPyramid: +c.ms_pyramid.toFixed(1),
+    rustBase: +c.ms_base.toFixed(1),
+    rustTotal: +c.ms_total.toFixed(1),
+    commitRoundTrip: Math.round(s.tCommitted! - s.tUp!),
+    untilVisible: Math.round(s.tVisible! - s.tUp!),
+    mpTouched: +(c.pixels / 1e6).toFixed(2),
+    dirtyTiles: c.dirty.length,
+  };
+}
+
+/** View direction under a CSS-pixel position of the canvas. */
+function screenDir(x: number, y: number): Vec3 {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const tan = Math.tan(view.fov / 2);
+  return rayDir(basis(view), (x / w) * 2 - 1, 1 - (y / h) * 2, (w / h) * tan, tan);
+}
 
 // open timing (per session)
 let openT0 = 0;
@@ -53,13 +94,17 @@ function opts(): TileOptions {
   };
 }
 
+let baseVersion = 0;
+
 async function loadBase(): Promise<void> {
   if (!info) return;
   const o = opts();
   const session = info.session;
   const t = performance.now();
+  const ver = tm?.version ?? 0;
   const { buf } = await fetchBytes(`${session}/base/${o.wire}`, o.transport);
   if (!info || info.session !== session) return;
+  baseVersion = Math.max(baseVersion, ver);
   let mips = 0;
   for (let w = info.base_w, h = info.base_h; ; w = Math.max(1, w >> 1), h = Math.max(1, h >> 1)) {
     mips++;
@@ -67,7 +112,15 @@ async function loadBase(): Promise<void> {
   }
   renderer.setBase(buf, info.base_w, info.base_h, mips, o.wire);
   baseUploadedAt = performance.now();
+  if (ver > 0) return; // after a commit: no log line per stroke
   log(`base texture ${(buf.byteLength / 1e6).toFixed(1)} MB fetched+uploaded in ${(baseUploadedAt - t).toFixed(0)} ms`);
+}
+
+function wireTiles(t: TileManager): void {
+  t.onError = log;
+  t.onRefreshed = (k) => {
+    for (const s of brushes.strokes) s.pending?.delete(k);
+  };
 }
 
 function rebuildTiles(): void {
@@ -75,7 +128,7 @@ function rebuildTiles(): void {
   tm?.dispose();
   const ready = tm?.tilesReady ?? false;
   tm = new TileManager(renderer, info, opts());
-  tm.onError = log;
+  wireTiles(tm);
   if (ready) tm.onTilesReady();
   if (baseUploadedAt) void loadBase(); // wire format may have changed
 }
@@ -85,6 +138,9 @@ async function openImage(path: string, useCache: boolean): Promise<OpenInfo> {
   tm = null;
   info = null;
   baseUploadedAt = 0;
+  baseVersion = 0;
+  brushes.strokes = [];
+  brushes.dirty = true;
   firstViewMs = tilesMs = sharpMs = rustBaseMs = NaN;
   renderer.setBase(null, 1, 1, 1, "u8");
   openT0 = performance.now();
@@ -98,7 +154,7 @@ async function openImage(path: string, useCache: boolean): Promise<OpenInfo> {
   log(`open #${i.session}: ${i.width}×${i.height} ${i.kind} ${i.storage}, ${i.levels.length} levels, ` +
     `${i.from_cache ? "from cache" : "decoding"} (invoke ${(performance.now() - openT0).toFixed(0)} ms)`);
   tm = new TileManager(renderer, i, opts());
-  tm.onError = log;
+  wireTiles(tm);
   view = { yaw: 0, pitch: 0, fov: 90 * DEG };
   drainStatus();
   return i;
@@ -146,6 +202,22 @@ let lastFrame = performance.now();
 let recording: { frames: number[]; cpu: number[]; gpu: number[]; missingMs: number; maxMissing: number } | null = null;
 let script: ((now: number) => boolean) | null = null;
 let snapRequest: { name: string; done: () => void } | null = null;
+let captureRequest: ((img: ImageData) => void) | null = null;
+const capCanvas = document.createElement("canvas");
+let autoBrush = false;
+let autoOnly = "";
+
+async function saveImage(name: string, img: ImageData): Promise<void> {
+  const c = document.createElement("canvas");
+  c.width = img.width;
+  c.height = img.height;
+  c.getContext("2d")!.putImageData(img, 0, 0);
+  const b = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
+  if (b) await invoke("save_snapshot", new Uint8Array(await b.arrayBuffer()), { headers: { "x-name": name } });
+}
+
+/** Pixels of the next rendered frame. */
+const captureFrame = () => new Promise<ImageData>((res) => (captureRequest = res));
 let autoMode = false;
 
 /** Captures the canvas right after the next render (WebGPU canvases are cleared after presentation). */
@@ -174,6 +246,25 @@ function frame(now: number): void {
   const time = (now - t0Page) / 1000;
   if (tm) tm.pxScale = renderer.scale || window.devicePixelRatio || 1;
   if (tm) tm.update(view, velocity, canvas.width, canvas.height, now, time);
+  for (const s of brushes.settle(now)) {
+    lastCommitLog = `${s.kind} stroke: ${JSON.stringify(strokeReport(s))}`;
+    if (!autoBrush) log(lastCommitLog);
+  }
+  if (brushes.dirty) {
+    const b = brushes.buffers();
+    renderer.writeStrokes(b.strokes, b.chunks, b.points);
+  }
+  const showCursor = brushes.tool !== "navigate" && cursor;
+  const src = brushes.tool === "clone" && cursor
+    ? (brushes.rotation ? rotate(brushes.rotation, cursor) : brushes.source)
+    : null;
+  const brushParams = {
+    cursor: showCursor ? cursor : null,
+    radius: brushes.radiusDeg * DEG,
+    source: src,
+    strokeCount: brushes.strokes.length,
+    baseVersion,
+  };
   renderer.render({
     view,
     time,
@@ -184,7 +275,17 @@ function frame(now: number): void {
     linear: info?.storage === "f16",
     aniso: tm?.o.aniso ?? true,
     debug: $<HTMLInputElement>("debug").checked,
-  });
+  }, brushParams);
+  if (captureRequest) {
+    // read back the frame just rendered (before it is presented)
+    const c2 = capCanvas.getContext("2d", { willReadFrequently: true })!;
+    capCanvas.width = canvas.width;
+    capCanvas.height = canvas.height;
+    c2.drawImage(canvas, 0, 0);
+    const r = captureRequest;
+    captureRequest = null;
+    r(c2.getImageData(0, 0, canvas.width, canvas.height));
+  }
 
   if (snapRequest) {
     const { name, done } = snapRequest;
@@ -241,6 +342,8 @@ setInterval(() => {
     tm ? `tile wait p50 ${pct(tm.waits, 50)?.toFixed(0)} p95 ${pct(tm.waits, 95)?.toFixed(0)} max ${Math.max(0, ...tm.waits).toFixed(0)} ms  dropped ${tm.dropped} evicted ${tm.evicted}` : "",
     `open: first view ${firstViewMs.toFixed(0)} ms (rust base ${rustBaseMs.toFixed(0)})  tiles ${tilesMs.toFixed(0)}  sharp ${sharpMs.toFixed(0)} ms`,
     `rust peak RSS ${peakRss.toFixed(0)} MB`,
+    `tool ${brushes.tool}  r ${brushes.radiusDeg.toFixed(2)}°  hardness ${brushes.hardness}  pending strokes ${brushes.strokes.length}`,
+    lastCommitLog,
   ].join("\n");
 }, 250);
 
@@ -259,19 +362,52 @@ function oneToOneFov(): number {
 }
 
 let drag: { x: number; y: number } | null = null;
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointerdown", (e) => {
-  drag = { x: e.clientX, y: e.clientY };
   canvas.setPointerCapture(e.pointerId);
   script = null;
+  // left button paints with a brush tool; right/middle button or space+drag always rotates
+  if (brushes.tool !== "navigate" && e.button === 0 && !spaceHeld && info && tm?.o.layout === "equirect") {
+    const d = screenDir(e.offsetX, e.offsetY);
+    if (brushes.tool === "clone" && e.altKey) {
+      brushes.setSource(d);
+      return;
+    }
+    if (brushes.begin(d)) {
+      painting = true;
+      return;
+    }
+  }
+  drag = { x: e.clientX, y: e.clientY };
 });
 canvas.addEventListener("pointermove", (e) => {
+  cursor = screenDir(e.offsetX, e.offsetY);
+  if (painting) {
+    brushes.extend(cursor, (2 * Math.tan(view.fov / 2)) / canvas.clientHeight);
+    return;
+  }
   if (!drag) return;
   const k = (2 * Math.tan(view.fov / 2)) / canvas.clientHeight;
   view.yaw -= (e.clientX - drag.x) * k;
   view.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, view.pitch + (e.clientY - drag.y) * k));
   drag = { x: e.clientX, y: e.clientY };
 });
-canvas.addEventListener("pointerup", () => (drag = null));
+canvas.addEventListener("pointerup", () => {
+  drag = null;
+  if (painting) {
+    painting = false;
+    void commitActive();
+  }
+});
+canvas.addEventListener("pointerleave", () => (cursor = null));
+window.addEventListener("keyup", (e) => {
+  if (e.key === " ") spaceHeld = false;
+});
+function setTool(t: Tool): void {
+  brushes.tool = t;
+  $<HTMLSelectElement>("tool").value = t;
+  canvas.style.cursor = t === "navigate" ? "grab" : "none";
+}
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   view.fov = Math.max(minFov(), Math.min(120 * DEG, view.fov * Math.exp(e.deltaY * 0.0015)));
@@ -287,6 +423,12 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "0") view = { yaw: view.yaw, pitch: 0, fov: 90 * DEG };
   if (e.key === "n") view = { yaw: view.yaw, pitch: -Math.PI / 2, fov: 90 * DEG };
   if (e.key === "d") $<HTMLInputElement>("debug").click();
+  if (e.key === " ") spaceHeld = true;
+  if (e.key === "b") setTool("mask");
+  if (e.key === "s") setTool("clone");
+  if (e.key === "v") setTool("navigate");
+  if (e.key === "[") brushes.radiusDeg = Math.max(0.02, brushes.radiusDeg * 0.8);
+  if (e.key === "]") brushes.radiusDeg = Math.min(30, brushes.radiusDeg * 1.25);
   if (e.key === "h") document.body.classList.toggle("nohud");
 });
 
@@ -456,6 +598,141 @@ async function benchOpen(path: string): Promise<unknown[]> {
   return rows;
 }
 
+// ---------------------------------------------------------------- S2 brush benchmark
+
+interface Scenario {
+  name: string;
+  view: View;
+  kind: "mask" | "clone";
+  pts: [number, number][];
+  r: number;
+  h: number;
+  rot?: [number, number, number, number];
+}
+
+/** Same strokes as `s1-bench --strokes` (yaw/pitch in degrees). */
+function scenarios(): Scenario[] {
+  const line = (a: [number, number], b: [number, number], n: number): [number, number][] =>
+    Array.from({ length: n + 1 }, (_, i) => {
+      const t = i / n;
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t + Math.sin(t * 12) * 1.5];
+    });
+  const spiral: [number, number][] = Array.from({ length: 80 }, (_, i) => [((i * 27) % 360) - 180, -90 + 2 + i * 0.2]);
+  const circle: [number, number][] = Array.from({ length: 73 }, (_, i) => [i * 5 - 180, -72]);
+  const h = 20 * DEG;
+  const q = 0.25 * DEG;
+  return [
+    { name: "horizon mask r1.5° 30° long", view: { yaw: 0, pitch: 0, fov: 60 * DEG }, kind: "mask", pts: line([-15, 0], [15, 0], 60), r: 1.5, h: 0.5 },
+    { name: "seam mask r2° across 180°", view: { yaw: Math.PI, pitch: 5 * DEG, fov: 60 * DEG }, kind: "mask", pts: line([165, 5], [195, 5], 60), r: 2, h: 0.5 },
+    { name: "nadir ring mask r2° at -72°", view: { yaw: 0, pitch: -Math.PI / 2, fov: 100 * DEG }, kind: "mask", pts: circle, r: 2, h: 0.7 },
+    { name: "nadir clone r4° spiral (tripod)", view: { yaw: 0, pitch: -Math.PI / 2, fov: 80 * DEG }, kind: "clone", pts: spiral, r: 4, h: 0.6, rot: [Math.cos(h), Math.sin(h), 0, 0] },
+    { name: "1:1 clone r0.15°", view: { yaw: 30.5 * DEG, pitch: 2 * DEG, fov: oneToOneFov() }, kind: "clone", pts: line([30, 2], [31, 2], 30), r: 0.15, h: 0.5, rot: [Math.cos(q), 0, Math.sin(q), 0] },
+    { name: "big mask r10° 90° long", view: { yaw: 0, pitch: -20 * DEG, fov: 110 * DEG }, kind: "mask", pts: line([-45, -20], [45, -20], 90), r: 10, h: 0.3 },
+  ];
+}
+
+const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+/** Preview (a) vs committed (b); `before` = frame before painting: pixels unchanged in a and b are
+ * outside the stroke and counted separately (they would point at unrelated tile changes). */
+function imageDiff(a: ImageData, b: ImageData, before: ImageData): Record<string, number> {
+  let over2 = 0, over8 = 0, over32 = 0, sum = 0, max = 0, region = 0, outside = 0;
+  const m3 = (x: ImageData, y: ImageData, i: number) =>
+    Math.max(Math.abs(x.data[i] - y.data[i]), Math.abs(x.data[i + 1] - y.data[i + 1]), Math.abs(x.data[i + 2] - y.data[i + 2]));
+  for (let i = 0; i < a.data.length; i += 4) {
+    const m = m3(a, b, i);
+    const inStroke = m3(before, a, i) > 0 || m3(before, b, i) > 0;
+    if (!inStroke) {
+      if (m > 0) outside++; // cannot happen unless something else changed on screen
+      continue;
+    }
+    region++;
+    if (m === 0) continue;
+    sum += m;
+    if (m > max) max = m;
+    if (m > 2) over2++;
+    if (m > 8) over8++;
+    if (m > 32) over32++;
+  }
+  return { strokePx: region, maxDiff: max, meanDiffInStroke: +(sum / Math.max(1, region)).toFixed(3), pxOver2: over2, pxOver8: over8, pxOver32: over32, outside };
+}
+
+async function runScenario(sc: Scenario): Promise<Record<string, unknown>> {
+  view = { ...sc.view };
+  await until(() => !!tm && tm.stats.missing === 0 && tm.stats.inflight === 0 && tm.stats.queued === 0, 10000);
+  await sleep(150);
+  brushes.tool = sc.kind;
+  brushes.radiusDeg = sc.r;
+  brushes.hardness = sc.h;
+  const dirs = sc.pts.map(([y, p]) => fromYawPitch(y, p));
+  if (sc.rot) {
+    brushes.rotation = sc.rot;
+    brushes.source = rotate(sc.rot, dirs[0]);
+  }
+  cursor = null;
+  await nextFrame();
+  const before = await captureFrame();
+  cursor = dirs[0];
+  // paint over ~1 s, a few points per frame, while recording frame times
+  recording = { frames: [], cpu: [], gpu: [], missingMs: 0, maxMissing: 0 };
+  brushes.begin(dirs[0]);
+  const perFrame = Math.max(1, Math.ceil(dirs.length / 60));
+  for (let i = 1; i < dirs.length; i += perFrame) {
+    for (let k = i; k < Math.min(dirs.length, i + perFrame); k++) brushes.extend(dirs[k], 0, true);
+    await nextFrame();
+  }
+  cursor = null; // no brush ring in the compared frames
+  await nextFrame();
+  const pre = await captureFrame();
+  const r = recording;
+  recording = null;
+  const s = await commitActive();
+  if (!s?.commit) return { name: sc.name, error: s?.error ?? "no commit" };
+  await until(() => s.tVisible !== undefined, 15000);
+  await nextFrame();
+  const post = await captureFrame();
+  brushes.tool = "navigate";
+  cursor = null;
+  const res = {
+    name: sc.name,
+    paintFps: Math.round(1000 / (r.frames.reduce((a, b) => a + b, 0) / r.frames.length)),
+    paintFrameMax: +Math.max(...r.frames).toFixed(1),
+    paintCpuP95: +pct(r.cpu, 95).toFixed(2),
+    paintGpuP95: +pct(r.gpu, 95)?.toFixed(2),
+    ...(s.tVisible ? strokeReport(s) : { untilVisible: "timeout" }),
+    diff: imageDiff(pre, post, before),
+  };
+  log(`  ${JSON.stringify(res)}`);
+  if (autoMode) {
+    const tag = `brush-${sc.name.split(" ").slice(0, 2).join("-")}`;
+    await saveImage(`${tag}-preview`, pre);
+    await saveImage(`${tag}-committed`, post);
+    // |preview − committed| × 8
+    const d = new ImageData(pre.width, pre.height);
+    for (let i = 0; i < pre.data.length; i += 4) {
+      for (let k = 0; k < 3; k++) d.data[i + k] = Math.min(255, Math.abs(pre.data[i + k] - post.data[i + k]) * 8);
+      d.data[i + 3] = 255;
+    }
+    await saveImage(`${tag}-diff-x8`, d);
+  }
+  return res;
+}
+
+async function benchBrush(): Promise<unknown[]> {
+  if (!tm?.tilesReady) throw new Error("open an image and wait for tiles");
+  if (tm.o.layout !== "equirect") throw new Error("brushes need the equirect layout");
+  autoBrush = true;
+  const out = [];
+  try {
+    const only = autoOnly ? scenarios().filter((sc) => sc.name.includes(autoOnly)) : scenarios();
+    for (const sc of only) out.push(await runScenario(sc));
+  } finally {
+    autoBrush = false;
+  }
+  console.table(out);
+  return out;
+}
+
 async function benchOpenCached(path: string): Promise<unknown> {
   await openImage(path, true);
   const ok = await until(() => !isNaN(sharpMs), 30000);
@@ -506,6 +783,9 @@ async function main(): Promise<void> {
   $("bpath").onclick = guard(benchPath);
   $("btransport").onclick = guard(benchTransport);
   $("bopen").onclick = guard(() => benchOpen(sel.value));
+  $<HTMLSelectElement>("tool").onchange = (e) => setTool((e.target as HTMLSelectElement).value as Tool);
+  $<HTMLInputElement>("hardness").onchange = (e) => (brushes.hardness = parseFloat((e.target as HTMLInputElement).value));
+  $("bbrush").onclick = guard(benchBrush);
   $("copy").onclick = () => navigator.clipboard.writeText(logEl.textContent ?? "");
   for (const id of ["layout", "wire", "transport", "slots", "inflight", "uploads", "prefetch", "aniso", "bias"]) {
     $(id).addEventListener("change", () => {
@@ -515,10 +795,11 @@ async function main(): Promise<void> {
   }
   requestAnimationFrame(frame);
 
-  const auto = await invoke<{ files: string[]; layouts: Layout[]; scale: number; transports: Transport[]; snaps: boolean; tune: [string, string][] } | null>("auto_config");
+  const auto = await invoke<{ files: string[]; layouts: Layout[]; scale: number; transports: Transport[]; snaps: boolean; mode: string; only: string; tune: [string, string][] } | null>("auto_config");
   if (auto) {
     autoMode = auto.snaps;
     renderer.scale = auto.scale;
+    autoOnly = auto.only;
     for (const [k, v] of auto.tune) {
       const el = $<HTMLInputElement>(k);
       if (el.type === "checkbox") el.checked = v === "1" || v === "true";
@@ -539,6 +820,22 @@ async function main(): Promise<void> {
       sel.value = f;
       log(`AUTO ${name}`);
       const r: Record<string, unknown> = {};
+      if (auto.mode === "brush") {
+        try {
+          $<HTMLSelectElement>("layout").value = "equirect";
+          $<HTMLSelectElement>("transport").value = transports[0];
+          // decode (not the cache) so the pyramid is in memory for editing
+          await openImage(f, false);
+          await until(() => !isNaN(sharpMs), 30000);
+          r.brush = await benchBrush();
+        } catch (e) {
+          r.error = String(e);
+          log(`ERROR ${e}`);
+        }
+        r.peakRssMb = Math.round(peakRss);
+        results[name] = r;
+        continue;
+      }
       try {
         $<HTMLSelectElement>("layout").value = "equirect";
         $<HTMLSelectElement>("transport").value = transports[0];

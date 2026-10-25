@@ -2895,6 +2895,7 @@ dependencies = [
  "mimalloc",
  "mozjpeg",
  "parking_lot 0.13.0",
+ "png",
  "rayon",
  "serde",
  "serde_json",

@@ -63,7 +63,14 @@ export class TileManager {
   private resident = new Map<number, number>();
   private inflight = new Map<number, AbortController>();
   private notReady = new Set<number>();
-  private uploads: { k: number; buf: Uint8Array }[] = [];
+  private uploads: { k: number; buf: Uint8Array; ver: number }[] = [];
+  /** S2: edit version per slot (which commits the tile in that slot contains) */
+  readonly slotVersion: Uint32Array;
+  /** S2: current edit version; requests remember the version at the time they were sent */
+  version = 0;
+  /** S2: resident tiles changed by a commit that are visible and wait for their new content */
+  private refresh = new Set<number>();
+  onRefreshed?: (k: number) => void;
   private needed = new Map<number, number>(); // key → priority (lower = sooner)
   private prefetchSet = new Set<number>();
   private neededSince = new Map<number, number>();
@@ -120,6 +127,7 @@ export class TileManager {
     this.slotKey = new Int32Array(n).fill(-1);
     this.slotUsed = new Float64Array(n);
     this.slotTime = new Float32Array(n);
+    this.slotVersion = new Uint32Array(n);
     r.writePages(this.pages);
   }
 
@@ -276,8 +284,9 @@ export class TileManager {
     let queued = 0;
     if (this.tilesReady && this.inflight.size < this.o.maxInflight) {
       const want = [...this.needed]
-        .filter(([k]) => !this.resident.has(k) && !this.inflight.has(k) && !this.notReady.has(k))
-        .sort((a, b) => a[1] - b[1]);
+        .filter(([k]) => (!this.resident.has(k) || this.refresh.has(k)) && !this.inflight.has(k) && !this.notReady.has(k))
+        // changed visible tiles first (their stroke is still shown as preview)
+        .sort((a, b) => (this.refresh.has(a[0]) ? -1e7 : 0) + a[1] - ((this.refresh.has(b[0]) ? -1e7 : 0) + b[1]));
       queued = want.length;
       for (const [k] of want) {
         if (this.inflight.size >= this.o.maxInflight) break;
@@ -285,11 +294,28 @@ export class TileManager {
       }
     }
 
+    // S2: refresh-pending tiles that went out of view are dropped instead of refreshed
+    for (const k of this.refresh) {
+      if (!this.needed.has(k) || this.prefetchSet.has(k)) this.evict(k);
+    }
+
     // uploads (budgeted per frame)
     let n = 0;
     while (this.uploads.length && n < this.o.uploadsPerFrame) {
       const up = this.uploads.shift()!;
-      if (this.resident.has(up.k)) continue;
+      const res = this.resident.get(up.k);
+      if (res !== undefined) {
+        if (!this.refresh.has(up.k)) continue;
+        // replace the content in place – no fade, no intermediate state
+        this.r.writeTile(res, up.buf);
+        this.slotVersion[res] = up.ver;
+        this.slotUsed[res] = this.frame;
+        this.refresh.delete(up.k);
+        this.pagesDirty = true;
+        this.onRefreshed?.(up.k);
+        n++;
+        continue;
+      }
       const slot = this.allocSlot();
       if (slot < 0) {
         this.dropped++;
@@ -299,6 +325,7 @@ export class TileManager {
       this.slotKey[slot] = up.k;
       this.slotUsed[slot] = this.frame;
       this.slotTime[slot] = time;
+      this.slotVersion[slot] = up.ver;
       this.resident.set(up.k, slot);
       const [g, tx, ty] = keyParts(up.k);
       this.pages[this.grids[g].offset + ty * this.grids[g].tilesX + tx] = slot + 1;
@@ -313,6 +340,7 @@ export class TileManager {
     if (this.pagesDirty) {
       this.r.writePages(this.pages);
       this.r.writeSlotTimes(this.slotTime);
+      this.r.writeSlotVersions(this.slotVersion);
       this.pagesDirty = false;
     }
     this.stats = {
@@ -342,14 +370,54 @@ export class TileManager {
       const [g, tx, ty] = keyParts(old);
       this.pages[this.grids[g].offset + ty * this.grids[g].tilesX + tx] = 0;
       this.evicted++;
+      if (this.refresh.delete(old)) this.onRefreshed?.(old);
     }
     return best;
+  }
+
+  private evict(k: number): void {
+    const slot = this.resident.get(k);
+    if (slot === undefined) return;
+    this.resident.delete(k);
+    this.slotKey[slot] = -1;
+    const [g, tx, ty] = keyParts(k);
+    this.pages[this.grids[g].offset + ty * this.grids[g].tilesX + tx] = 0;
+    this.pagesDirty = true;
+    if (this.refresh.delete(k)) this.onRefreshed?.(k);
+  }
+
+  /**
+   * S2: tiles [level, tx, ty] changed by commit `version`. Visible resident ones are refreshed in place
+   * (their stroke stays visible as preview until then), others are dropped. Returns the visible ones.
+   */
+  invalidate(dirty: [number, number, number][], version: number): Set<number> {
+    this.version = version;
+    const keys = new Set(dirty.map(([l, x, y]) => key(l, x, y)));
+    this.uploads = this.uploads.filter((u) => !keys.has(u.k));
+    const pending = new Set<number>();
+    for (const k of keys) {
+      const c = this.inflight.get(k);
+      if (c) {
+        c.abort();
+        this.inflight.delete(k);
+      }
+      if (!this.resident.has(k)) continue;
+      if (this.needed.has(k) && !this.prefetchSet.has(k)) {
+        this.refresh.add(k);
+        pending.add(k);
+      } else {
+        this.evict(k);
+      }
+    }
+    this.lastViewKey = "";
+    return pending;
   }
 
   private request(k: number): void {
     const ctrl = new AbortController();
     this.inflight.set(k, ctrl);
     const t0 = performance.now();
+    const ver = this.version;
     fetchBytes(this.path(k), this.o.transport, ctrl.signal)
       .then(({ buf, serverMs }) => {
         if (this.inflight.get(k) !== ctrl) return;
@@ -358,7 +426,7 @@ export class TileManager {
         if (!isNaN(serverMs)) this.serverMs.push(serverMs);
         this.bytes += buf.byteLength;
         this.fetched++;
-        this.uploads.push({ k, buf });
+        this.uploads.push({ k, buf, ver });
       })
       .catch((e) => {
         if (this.inflight.get(k) === ctrl) this.inflight.delete(k);
@@ -381,6 +449,8 @@ export class TileManager {
     this.evicted = 0;
   }
 }
+
+export const tileKey = key;
 
 export function pct(a: number[], p: number): number {
   if (!a.length) return NaN;

@@ -4,8 +4,10 @@
 
 pub mod cache;
 pub mod decode;
+pub mod edit;
 pub mod pyramid;
 pub mod session;
+pub mod synthetic;
 pub mod transport;
 
 // S1b: fresh large allocations are expensive on Windows (page faults, zeroing); mimalloc reuses memory.
@@ -47,11 +49,17 @@ pub fn testdata_root() -> PathBuf {
 /// Panoramas under `root`, skipping hidden/underscore folders and source frames (RAW, Stitching).
 pub fn list_images(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
         paths.sort();
         for p in paths {
-            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let name = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             if name.starts_with('.') {
                 continue;
             }
@@ -72,13 +80,22 @@ pub fn list_images(root: &Path) -> Vec<PathBuf> {
 #[tauri::command]
 fn list_testdata() -> Vec<TestFile> {
     let root = testdata_root();
-    list_images(&root)
+    let synthetic = [24000u32, 8192].map(|w| TestFile {
+        path: format!("{}{w}", synthetic::PREFIX),
+        name: format!(
+            "synthetic {w}×{} ({:.0} MP, public)",
+            w / 2,
+            w as f64 * (w / 2) as f64 / 1e6
+        ),
+        size_mb: 0.0,
+    });
+    synthetic
         .into_iter()
-        .map(|p| TestFile {
+        .chain(list_images(&root).into_iter().map(|p| TestFile {
             size_mb: std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) as f64 / 1e6,
             name: p.strip_prefix(&root).unwrap_or(&p).to_string_lossy().into(),
             path: p.to_string_lossy().into(),
-        })
+        }))
         .collect()
 }
 
@@ -97,11 +114,18 @@ fn open_image(
     let opts = session::Options {
         use_cache,
         write_cache,
-        jpeg: if jpeg == "zune" { decode::JpegDecoder::Zune } else { decode::JpegDecoder::Turbo },
+        jpeg: if jpeg == "zune" {
+            decode::JpegDecoder::Zune
+        } else {
+            decode::JpegDecoder::Turbo
+        },
     };
     let app2 = app.clone();
     let s = Session::open(id, PathBuf::from(path), opts, move |st| {
-        eprintln!("[session {}] {:>8.1} ms  {:<14} {}", st.session, st.ms, st.stage, st.detail);
+        eprintln!(
+            "[session {}] {:>8.1} ms  {:<14} {}",
+            st.session, st.ms, st.stage, st.detail
+        );
         let _ = app2.emit("pano-status", st);
     })?;
     let info = s.info.clone();
@@ -116,7 +140,9 @@ struct Stats {
 
 #[tauri::command]
 fn stats() -> Stats {
-    Stats { peak_rss_mb: session::peak_rss_mb() }
+    Stats {
+        peak_rss_mb: session::peak_rss_mb(),
+    }
 }
 
 /// Mirrors the frontend log to stdout so benchmark runs can be read from the terminal.
@@ -133,6 +159,10 @@ struct AutoConfig {
     transports: Vec<String>,
     /// canvas snapshots only when `S1_SNAP_DIR` is set (they show the private test images)
     snaps: bool,
+    /// `S1_AUTO_MODE=brush` runs the S2 brush benchmark instead of the S1 viewer benchmarks
+    mode: String,
+    /// `S2_ONLY=<part of a scenario name>`: run only matching brush scenarios
+    only: String,
     /// UI control overrides, e.g. `S1_TUNE=inflight=24,uploads=12`.
     tune: Vec<(String, String)>,
 }
@@ -145,21 +175,42 @@ fn auto_config() -> Option<AutoConfig> {
     let all = list_images(&testdata_root());
     let files = files
         .split(',')
-        .filter_map(|pat| all.iter().find(|p| p.to_string_lossy().contains(pat.trim())))
-        .map(|p| p.to_string_lossy().to_string())
+        .filter_map(|pat| {
+            let pat = pat.trim();
+            if pat.starts_with(synthetic::PREFIX) {
+                return Some(pat.to_string());
+            }
+            all.iter()
+                .find(|p| p.to_string_lossy().contains(pat))
+                .map(|p| p.to_string_lossy().to_string())
+        })
         .collect();
     let layouts = std::env::var("S1_AUTO_LAYOUTS").unwrap_or_else(|_| "equirect".into());
-    let transports = std::env::var("S1_AUTO_TRANSPORTS").unwrap_or_else(|_| "protocol,ws,shared".into());
-    let scale = std::env::var("S1_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let transports =
+        std::env::var("S1_AUTO_TRANSPORTS").unwrap_or_else(|_| "protocol,ws,shared".into());
+    let scale = std::env::var("S1_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
     let tune = std::env::var("S1_TUNE")
         .unwrap_or_default()
         .split(',')
-        .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+        .filter_map(|kv| {
+            kv.split_once('=')
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        })
         .collect();
-    Some(AutoConfig { files, layouts: layouts.split(',').map(|s| s.trim().to_string()).collect(),
+    Some(AutoConfig {
+        files,
+        layouts: layouts.split(',').map(|s| s.trim().to_string()).collect(),
         scale,
-        transports: transports.split(',').map(|s| s.trim().to_string()).collect(),
+        transports: transports
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect(),
         snaps: std::env::var_os("S1_SNAP_DIR").is_some(),
+        mode: std::env::var("S1_AUTO_MODE").unwrap_or_default(),
+        only: std::env::var("S2_ONLY").unwrap_or_default(),
         tune,
     })
 }
@@ -167,10 +218,27 @@ fn auto_config() -> Option<AutoConfig> {
 /// Saves a PNG of the canvas (raw request body) to `S1_SNAP_DIR` – local debugging only, never commit.
 #[tauri::command]
 fn save_snapshot(request: tauri::ipc::Request<'_>) -> Result<String, String> {
-    let tauri::ipc::InvokeBody::Raw(data) = request.body() else { return Err("expected raw body".into()) };
-    let name = request.headers().get("x-name").and_then(|v| v.to_str().ok()).unwrap_or("snap");
-    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
-    let dir = std::env::var_os("S1_SNAP_DIR").map(PathBuf::from).unwrap_or_else(|| cache::root().join("snapshots"));
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    let name = request
+        .headers()
+        .get("x-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("snap");
+    let name: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let dir = std::env::var_os("S1_SNAP_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cache::root().join("snapshots"));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let p = dir.join(format!("{name}.png"));
     std::fs::write(&p, data).map_err(|e| e.to_string())?;
@@ -194,7 +262,10 @@ fn serve(state: &AppState, path: &str) -> Result<Vec<u8>, (u16, String)> {
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
     let bad = |m: &str| (400u16, m.to_string());
     if parts.first() == Some(&"null") {
-        let n = parts.get(1).and_then(|p| p.parse().ok()).ok_or_else(|| bad("bad size"))?;
+        let n = parts
+            .get(1)
+            .and_then(|p| p.parse().ok())
+            .ok_or_else(|| bad("bad size"))?;
         return Ok(transport::null_payload(n));
     }
     if parts.get(1) == Some(&"batch") {
@@ -208,17 +279,27 @@ fn serve(state: &AppState, path: &str) -> Result<Vec<u8>, (u16, String)> {
                 if p.len() != 3 {
                     return Err(bad("bad batch item"));
                 }
-                serve(state, &format!("{session}/e/{}/{}/{}/{fmt}", p[0], p[1], p[2]))
+                serve(
+                    state,
+                    &format!("{session}/e/{}/{}/{}/{fmt}", p[0], p[1], p[2]),
+                )
             })
             .collect();
         return Ok(transport::pack_batch(items));
     }
     let num = |i: usize| -> Result<u32, (u16, String)> {
-        parts.get(i).and_then(|p| p.parse().ok()).ok_or_else(|| bad("bad number"))
+        parts
+            .get(i)
+            .and_then(|p| p.parse().ok())
+            .ok_or_else(|| bad("bad number"))
     };
     let wire = Wire::parse(parts.last().copied().unwrap_or("")).ok_or_else(|| bad("bad format"))?;
     let session_id = num(0)?;
-    let s = state.current.lock().clone().ok_or((410, "no image".to_string()))?;
+    let s = state
+        .current
+        .lock()
+        .clone()
+        .ok_or((410, "no image".to_string()))?;
     if s.info.session != session_id {
         return Err((410, "stale session".into()));
     }
@@ -234,6 +315,22 @@ fn serve(state: &AppState, path: &str) -> Result<Vec<u8>, (u16, String)> {
     })
 }
 
+/// S2: commit a stroke (full-resolution rasterisation in Rust).
+#[tauri::command]
+async fn commit_stroke(
+    state: tauri::State<'_, AppState>,
+    session: u32,
+    stroke: edit::Stroke,
+) -> Result<session::CommitResult, String> {
+    let s = state.current.lock().clone().ok_or("no image")?;
+    if s.info.session != session {
+        return Err("stale session".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || s.commit(&stroke))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 struct WsInfo {
     port: u16,
@@ -242,15 +339,24 @@ struct WsInfo {
 
 #[tauri::command]
 fn ws_info(state: tauri::State<'_, AppState>) -> Option<WsInfo> {
-    state.ws.lock().clone().map(|(port, token)| WsInfo { port, token })
+    state
+        .ws
+        .lock()
+        .clone()
+        .map(|(port, token)| WsInfo { port, token })
 }
 
 /// Creates one WebView2 shared buffer per entry of `sizes` and posts them to the page (Windows only).
 #[tauri::command]
-async fn shared_init(app: tauri::AppHandle, webview: tauri::Webview, sizes: Vec<usize>) -> Result<usize, String> {
-    let slots = tauri::async_runtime::spawn_blocking(move || transport::create_shared(&webview, sizes))
-        .await
-        .map_err(|e| e.to_string())??;
+async fn shared_init(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    sizes: Vec<usize>,
+) -> Result<usize, String> {
+    let slots =
+        tauri::async_runtime::spawn_blocking(move || transport::create_shared(&webview, sizes))
+            .await
+            .map_err(|e| e.to_string())??;
     let state = app.state::<AppState>();
     let count = slots.len();
     *state.shared.0.lock() = slots;
@@ -259,14 +365,23 @@ async fn shared_init(app: tauri::AppHandle, webview: tauri::Webview, sizes: Vec<
 
 /// Serves `path` into shared slot `slot`; returns the payload length.
 #[tauri::command]
-async fn tile_shared(state: tauri::State<'_, AppState>, path: String, slot: usize) -> Result<u32, String> {
+async fn tile_shared(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    slot: usize,
+) -> Result<u32, String> {
     let bytes = serve(&state, &path).map_err(|(code, m)| format!("{code} {m}"))?;
     transport::write_shared(&state.shared, slot, &bytes)
 }
 
 #[tauri::command]
-async fn tile_ipc(state: tauri::State<'_, AppState>, path: String) -> Result<tauri::ipc::Response, String> {
-    serve(&state, &path).map(tauri::ipc::Response::new).map_err(|(code, m)| format!("{code} {m}"))
+async fn tile_ipc(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    serve(&state, &path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|(code, m)| format!("{code} {m}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -279,7 +394,8 @@ pub fn run() {
             let token = transport::ws::token();
             let (tx, rx) = tokio::sync::oneshot::channel();
             let h2 = handle.clone();
-            let handler: transport::ws::Handler = Arc::new(move |path: &str| serve(&h2.state::<AppState>(), path));
+            let handler: transport::ws::Handler =
+                Arc::new(move |path: &str| serve(&h2.state::<AppState>(), path));
             let t2 = token.clone();
             tauri::async_runtime::spawn(async move { transport::ws::serve(t2, handler, tx).await });
             tauri::async_runtime::spawn(async move {
@@ -302,13 +418,30 @@ pub fn run() {
                     .header("Access-Control-Expose-Headers", "x-server-ms")
                     .header("x-server-ms", ms);
                 let resp = match res {
-                    Ok(bytes) => b.status(200).header("Content-Type", "application/octet-stream").body(bytes),
+                    Ok(bytes) => b
+                        .status(200)
+                        .header("Content-Type", "application/octet-stream")
+                        .body(bytes),
                     Err((code, msg)) => b.status(code).body(msg.into_bytes()),
                 };
                 responder.respond(resp.unwrap());
             });
         })
-        .invoke_handler(tauri::generate_handler![list_testdata, open_image, stats, clear_cache, tile_ipc, js_log, auto_config, save_snapshot, quit, ws_info, shared_init, tile_shared])
+        .invoke_handler(tauri::generate_handler![
+            list_testdata,
+            open_image,
+            stats,
+            clear_cache,
+            tile_ipc,
+            js_log,
+            auto_config,
+            save_snapshot,
+            quit,
+            ws_info,
+            shared_init,
+            tile_shared,
+            commit_stroke
+        ])
         .run(context())
         .expect("error while running tauri application");
 }

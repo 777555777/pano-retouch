@@ -2,7 +2,7 @@
 //! a footer), the base texture and a `meta.json` written last as the completeness marker.
 //! Location: OS cache dir / pano-retouch-spike-s1 / <hash of path, size, mtime>.
 
-use crate::pyramid::{Base, LevelInfo, Pyramid, Storage, SLOT};
+use crate::pyramid::{Base, LevelInfo, Pyramid, SLOT, Storage};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -24,13 +24,22 @@ pub struct Meta {
 }
 
 pub fn root() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("pano-retouch-spike-s1")
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("pano-retouch-spike-s1")
 }
 
 pub fn dir_for(source: &Path) -> Result<PathBuf> {
+    if crate::decode::kind_of(source) == Some(crate::decode::Kind::Synthetic) {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut h);
+        return Ok(root().join(format!("{:016x}", h.finish())));
+    }
     let md = fs::metadata(source).map_err(|e| e.to_string())?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    fs::canonicalize(source).map_err(|e| e.to_string())?.hash(&mut h);
+    fs::canonicalize(source)
+        .map_err(|e| e.to_string())?
+        .hash(&mut h);
     md.len().hash(&mut h);
     md.modified().ok().hash(&mut h);
     Ok(root().join(format!("{:016x}", h.finish())))
@@ -59,7 +68,9 @@ pub fn write(dir: &Path, pyr: &Pyramid, base: &Base, levels: &[LevelInfo]) -> Re
         for ty in 0..info.tiles_y {
             let row: Vec<Vec<u8>> = (0..info.tiles_x)
                 .into_par_iter()
-                .map(|tx| lz4_flex::compress_prepend_size(&pyr.equirect_tile_raw(li, tx, ty).unwrap()))
+                .map(|tx| {
+                    lz4_flex::compress_prepend_size(&pyr.equirect_tile_raw(li, tx, ty).unwrap())
+                })
                 .collect();
             for t in row {
                 w.write_all(&t).map_err(|e| e.to_string())?;
@@ -71,12 +82,17 @@ pub fn write(dir: &Path, pyr: &Pyramid, base: &Base, levels: &[LevelInfo]) -> Re
             w.write_all(&o.to_le_bytes()).map_err(|e| e.to_string())?;
             w.write_all(&l.to_le_bytes()).map_err(|e| e.to_string())?;
         }
-        w.write_all(&(index.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+        w.write_all(&(index.len() as u32).to_le_bytes())
+            .map_err(|e| e.to_string())?;
         w.write_all(MAGIC).map_err(|e| e.to_string())?;
         w.flush().map_err(|e| e.to_string())?;
         total += off;
     }
-    fs::write(tmp.join("base.lz4"), lz4_flex::compress_prepend_size(&base.raw)).map_err(|e| e.to_string())?;
+    fs::write(
+        tmp.join("base.lz4"),
+        lz4_flex::compress_prepend_size(&base.raw),
+    )
+    .map_err(|e| e.to_string())?;
     let meta = Meta {
         width: levels[0].w,
         height: levels[0].h,
@@ -84,7 +100,8 @@ pub fn write(dir: &Path, pyr: &Pyramid, base: &Base, levels: &[LevelInfo]) -> Re
         levels: levels.to_vec(),
         base_mips: base.mips.clone(),
     };
-    fs::write(tmp.join("meta.json"), serde_json::to_vec(&meta).unwrap()).map_err(|e| e.to_string())?;
+    fs::write(tmp.join("meta.json"), serde_json::to_vec(&meta).unwrap())
+        .map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(dir);
     fs::rename(&tmp, dir).map_err(|e| e.to_string())?;
     Ok(total)
@@ -97,7 +114,9 @@ pub struct Reader {
 
 impl Reader {
     pub fn open(dir: &Path) -> Result<Option<(Reader, Base)>> {
-        let Ok(meta_bytes) = fs::read(dir.join("meta.json")) else { return Ok(None) };
+        let Ok(meta_bytes) = fs::read(dir.join("meta.json")) else {
+            return Ok(None);
+        };
         let meta: Meta = serde_json::from_slice(&meta_bytes).map_err(|e| e.to_string())?;
         let mut packs = vec![];
         for li in 0..meta.levels.len() {
@@ -113,13 +132,24 @@ impl Reader {
             read_at(&f, &mut idx, len - 12 - n * 12)?;
             let index = idx
                 .chunks_exact(12)
-                .map(|c| (u64::from_le_bytes(c[..8].try_into().unwrap()), u32::from_le_bytes(c[8..].try_into().unwrap())))
+                .map(|c| {
+                    (
+                        u64::from_le_bytes(c[..8].try_into().unwrap()),
+                        u32::from_le_bytes(c[8..].try_into().unwrap()),
+                    )
+                })
                 .collect();
             packs.push((f, index));
         }
-        let base_raw = lz4_flex::decompress_size_prepended(&fs::read(dir.join("base.lz4")).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let base = Base { storage: meta.storage, mips: meta.base_mips.clone(), raw: base_raw };
+        let base_raw = lz4_flex::decompress_size_prepended(
+            &fs::read(dir.join("base.lz4")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let base = Base {
+            storage: meta.storage,
+            mips: meta.base_mips.clone(),
+            raw: base_raw,
+        };
         Ok(Some((Reader { meta, packs }, base)))
     }
 
@@ -133,36 +163,50 @@ impl Reader {
         let mut buf = vec![0u8; len as usize];
         read_at(f, &mut buf, off)?;
         let raw = lz4_flex::decompress_size_prepended(&buf).map_err(|e| e.to_string())?;
-        debug_assert_eq!(raw.len(), (SLOT * SLOT * 4) as usize * self.meta.storage.bytes_per_sample());
+        debug_assert_eq!(
+            raw.len(),
+            (SLOT * SLOT * 4) as usize * self.meta.storage.bytes_per_sample()
+        );
         Ok(raw)
     }
 
     /// Reassembles full levels from the cache (needed for on-demand cube tiles).
     pub fn to_pyramid(&self) -> Result<Pyramid> {
-        use crate::pyramid::{Level, Pixels, GUTTER, TILE};
+        use crate::pyramid::{GUTTER, Level, Pixels, TILE};
         let bps = self.meta.storage.bytes_per_sample();
         let mut levels = vec![];
         for (li, info) in self.meta.levels.iter().enumerate() {
             let (w, h) = (info.w as usize, info.h as usize);
             let row_bytes = w * 4 * bps;
             let mut bytes = vec![0u8; row_bytes * h];
-            bytes.par_chunks_mut(row_bytes * TILE as usize).enumerate().try_for_each(|(ty, band)| -> Result<()> {
-                for tx in 0..info.tiles_x {
-                    let raw = self.tile_raw(li, tx, ty as u32)?;
-                    let x0 = tx as usize * TILE as usize;
-                    let cw = (w - x0).min(TILE as usize);
-                    let rows = band.len() / row_bytes;
-                    for j in 0..rows {
-                        let src = ((j + GUTTER as usize) * SLOT as usize + GUTTER as usize) * 4 * bps;
-                        let dst = j * row_bytes + x0 * 4 * bps;
-                        band[dst..dst + cw * 4 * bps].copy_from_slice(&raw[src..src + cw * 4 * bps]);
+            bytes
+                .par_chunks_mut(row_bytes * TILE as usize)
+                .enumerate()
+                .try_for_each(|(ty, band)| -> Result<()> {
+                    for tx in 0..info.tiles_x {
+                        let raw = self.tile_raw(li, tx, ty as u32)?;
+                        let x0 = tx as usize * TILE as usize;
+                        let cw = (w - x0).min(TILE as usize);
+                        let rows = band.len() / row_bytes;
+                        for j in 0..rows {
+                            let src =
+                                ((j + GUTTER as usize) * SLOT as usize + GUTTER as usize) * 4 * bps;
+                            let dst = j * row_bytes + x0 * 4 * bps;
+                            band[dst..dst + cw * 4 * bps]
+                                .copy_from_slice(&raw[src..src + cw * 4 * bps]);
+                        }
                     }
-                }
-                Ok(())
-            })?;
-            levels.push(Level { width: info.w, height: info.h, px: Pixels::from_bytes(self.meta.storage, &bytes) });
+                    Ok(())
+                })?;
+            levels.push(Level {
+                width: info.w,
+                height: info.h,
+                px: Pixels::from_bytes(self.meta.storage, &bytes),
+            });
         }
-        Ok(Pyramid { levels })
+        Ok(Pyramid {
+            levels: levels.into_iter().map(parking_lot::RwLock::new).collect(),
+        })
     }
 }
 
@@ -177,7 +221,9 @@ fn read_at(f: &File, buf: &mut [u8], mut off: u64) -> Result<()> {
     use std::os::windows::fs::FileExt;
     let mut done = 0;
     while done < buf.len() {
-        let n = f.seek_read(&mut buf[done..], off).map_err(|e| e.to_string())?;
+        let n = f
+            .seek_read(&mut buf[done..], off)
+            .map_err(|e| e.to_string())?;
         if n == 0 {
             return Err("unexpected EOF".into());
         }

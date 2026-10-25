@@ -47,6 +47,22 @@ pub struct Session {
     pub start: Instant,
     data: RwLock<Data>,
     cube_loading: std::sync::Mutex<bool>,
+    /// S2: edit version – incremented by every committed stroke
+    pub version: std::sync::atomic::AtomicU32,
+    commit_lock: std::sync::Mutex<()>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct CommitResult {
+    pub version: u32,
+    /// [level, tx, ty]
+    pub dirty: Vec<[u32; 3]>,
+    pub pixels: usize,
+    pub tiles_tested: usize,
+    pub ms_raster: f64,
+    pub ms_pyramid: f64,
+    pub ms_base: f64,
+    pub ms_total: f64,
 }
 
 pub enum TileError {
@@ -75,7 +91,11 @@ impl Session {
     ) -> Result<Arc<Session>, String> {
         let start = Instant::now();
         let cache_dir = cache::dir_for(&path)?;
-        let cached = if opts.use_cache { cache::Reader::open(&cache_dir)? } else { None };
+        let cached = if opts.use_cache {
+            cache::Reader::open(&cache_dir)?
+        } else {
+            None
+        };
         let probe = decode::probe(&path)?;
         let levels = pyramid::level_infos(probe.width, probe.height);
         let info = OpenInfo {
@@ -93,7 +113,14 @@ impl Session {
             base_h: pyramid::BASE_H,
             from_cache: cached.is_some(),
         };
-        let s = Arc::new(Session { info, start, data: RwLock::default(), cube_loading: Default::default() });
+        let s = Arc::new(Session {
+            info,
+            start,
+            data: RwLock::default(),
+            cube_loading: Default::default(),
+            version: Default::default(),
+            commit_lock: Default::default(),
+        });
 
         if let Some((reader, base)) = cached {
             let mut d = s.data.write();
@@ -104,8 +131,18 @@ impl Session {
             let ss = s.clone();
             // Emit asynchronously so the frontend has the OpenInfo before the first event.
             std::thread::spawn(move || {
-                n(Status { session: id, stage: "base", ms: ss.ms(), detail: "from cache".into() });
-                n(Status { session: id, stage: "tiles", ms: ss.ms(), detail: "from cache".into() });
+                n(Status {
+                    session: id,
+                    stage: "base",
+                    ms: ss.ms(),
+                    detail: "from cache".into(),
+                });
+                n(Status {
+                    session: id,
+                    stage: "tiles",
+                    ms: ss.ms(),
+                    detail: "from cache".into(),
+                });
             });
             return Ok(s);
         }
@@ -124,7 +161,10 @@ impl Session {
                             session: id,
                             stage: "base",
                             ms: ss.ms(),
-                            detail: format!("DCT 1/8 decode {:.0} ms ({}×{})", t, l.width, l.height),
+                            detail: format!(
+                                "DCT 1/8 decode {:.0} ms ({}×{})",
+                                t, l.width, l.height
+                            ),
                         });
                     }
                 }
@@ -136,7 +176,12 @@ impl Session {
         std::thread::spawn(move || {
             if let Err(e) = full_pipeline(&ss, &path, &cache_dir, &opts, &n) {
                 ss.data.write().error = Some(e.clone());
-                n(Status { session: id, stage: "error", ms: ss.ms(), detail: e });
+                n(Status {
+                    session: id,
+                    stage: "error",
+                    ms: ss.ms(),
+                    detail: e,
+                });
             }
         });
         Ok(s)
@@ -147,13 +192,21 @@ impl Session {
         Ok(pyramid::to_wire(base.storage, base.raw.clone(), wire))
     }
 
-    pub fn equirect_tile(&self, level: usize, tx: u32, ty: u32, wire: Wire) -> Result<Vec<u8>, TileError> {
+    pub fn equirect_tile(
+        &self,
+        level: usize,
+        tx: u32,
+        ty: u32,
+        wire: Wire,
+    ) -> Result<Vec<u8>, TileError> {
         let (pyr, cache, storage) = {
             let d = self.data.read();
             (d.pyramid.clone(), d.cache.clone(), self.info.storage)
         };
         let raw = if let Some(p) = pyr {
-            return p.equirect_tile_wire(level, tx, ty, wire).ok_or_else(|| TileError::Bad("bad tile".into()));
+            return p
+                .equirect_tile_wire(level, tx, ty, wire)
+                .ok_or_else(|| TileError::Bad("bad tile".into()));
         } else if let Some(c) = cache {
             c.tile_raw(level, tx, ty).map_err(TileError::Bad)?
         } else {
@@ -162,28 +215,86 @@ impl Session {
         Ok(pyramid::to_wire(storage, raw, wire))
     }
 
-    pub fn cube_tile(&self, face: u32, level: usize, tx: u32, ty: u32, wire: Wire) -> Result<Vec<u8>, TileError> {
-        let pyr = self.data.read().pyramid.clone();
-        let pyr = match pyr {
-            Some(p) => p,
-            None => {
-                // Re-opened from cache: reassemble the levels once (slow, spike only).
-                let cache = self.data.read().cache.clone().ok_or(TileError::NotReady)?;
-                let _g = self.cube_loading.lock().unwrap();
-                if let Some(p) = self.data.read().pyramid.clone() {
-                    p
-                } else {
-                    let t = Instant::now();
-                    let p = Arc::new(cache.to_pyramid().map_err(TileError::Bad)?);
-                    eprintln!("cube: reassembled pyramid from cache in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
-                    self.data.write().pyramid = Some(p.clone());
-                    p
-                }
-            }
-        };
-        let n = self.info.cube_levels.get(level).ok_or_else(|| TileError::Bad("bad level".into()))?.n;
-        let raw = pyr.cube_tile_raw(face, level, n, tx, ty).ok_or_else(|| TileError::Bad("bad tile".into()))?;
+    /// The in-memory pyramid; a session re-opened from the disk cache reassembles it once (slow, spike only).
+    fn pyramid(&self) -> Result<Arc<Pyramid>, TileError> {
+        if let Some(p) = self.data.read().pyramid.clone() {
+            return Ok(p);
+        }
+        let cache = self.data.read().cache.clone().ok_or(TileError::NotReady)?;
+        let _g = self.cube_loading.lock().unwrap();
+        if let Some(p) = self.data.read().pyramid.clone() {
+            return Ok(p);
+        }
+        let t = Instant::now();
+        let p = Arc::new(cache.to_pyramid().map_err(TileError::Bad)?);
+        eprintln!(
+            "reassembled pyramid from cache in {:.0} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
+        self.data.write().pyramid = Some(p.clone());
+        Ok(p)
+    }
+
+    pub fn cube_tile(
+        &self,
+        face: u32,
+        level: usize,
+        tx: u32,
+        ty: u32,
+        wire: Wire,
+    ) -> Result<Vec<u8>, TileError> {
+        let pyr = self.pyramid()?;
+        let n = self
+            .info
+            .cube_levels
+            .get(level)
+            .ok_or_else(|| TileError::Bad("bad level".into()))?
+            .n;
+        let raw = pyr
+            .cube_tile_raw(face, level, n, tx, ty)
+            .ok_or_else(|| TileError::Bad("bad tile".into()))?;
         Ok(pyramid::to_wire(self.info.storage, raw, wire))
+    }
+
+    /// S2: rasterises a stroke at full resolution, updates all levels and the base texture and returns
+    /// the tiles that changed. Commits are serialised; tile requests keep being served meanwhile.
+    pub fn commit(&self, stroke: &crate::edit::Stroke) -> Result<CommitResult, String> {
+        let pyr = self.pyramid().map_err(|e| match e {
+            TileError::NotReady => "image not ready".to_string(),
+            TileError::Bad(m) => m,
+        })?;
+        let _g = self.commit_lock.lock().unwrap();
+        let t0 = Instant::now();
+        let applied = crate::edit::apply(&pyr, stroke);
+        let ms_raster = t0.elapsed().as_secs_f64() * 1e3;
+        let t1 = Instant::now();
+        let rects = crate::edit::propagate(&pyr, applied.rects);
+        let ms_pyramid = t1.elapsed().as_secs_f64() * 1e3;
+        let t2 = Instant::now();
+        let base = Arc::new(Base::build(&pyr.levels.last().unwrap().read()));
+        let ms_base = t2.elapsed().as_secs_f64() * 1e3;
+        self.data.write().base = Some(base);
+        let mut dirty = vec![];
+        for (li, r) in rects.iter().enumerate() {
+            let info = &self.info.levels[li];
+            for (tx, ty) in crate::edit::dirty_tiles(info.w, info.h, r) {
+                dirty.push([li as u32, tx, ty]);
+            }
+        }
+        let version = self
+            .version
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        Ok(CommitResult {
+            version,
+            dirty,
+            pixels: applied.pixels,
+            tiles_tested: applied.tiles_tested,
+            ms_raster,
+            ms_pyramid,
+            ms_base,
+            ms_total: t0.elapsed().as_secs_f64() * 1e3,
+        })
     }
 }
 
@@ -202,7 +313,7 @@ fn full_pipeline(
     let pyr = Arc::new(Pyramid::build(l0));
     let t_pyr = t1.elapsed().as_secs_f64() * 1e3;
     let t2 = Instant::now();
-    let base = Arc::new(Base::build(pyr.levels.last().unwrap()));
+    let base = Arc::new(Base::build(&pyr.levels.last().unwrap().read()));
     let t_base = t2.elapsed().as_secs_f64() * 1e3;
     {
         let mut d = s.data.write();
@@ -213,7 +324,12 @@ fn full_pipeline(
         }
         drop(d);
         if !had_base {
-            notify(Status { session: id, stage: "base", ms: s.ms(), detail: "from pyramid".into() });
+            notify(Status {
+                session: id,
+                stage: "base",
+                ms: s.ms(),
+                detail: "from pyramid".into(),
+            });
         }
     }
     notify(Status {
@@ -229,7 +345,11 @@ fn full_pipeline(
             session: id,
             stage: "cache-written",
             ms: s.ms(),
-            detail: format!("{:.0} MB in {:.0} ms", bytes as f64 / 1e6, t3.elapsed().as_secs_f64() * 1e3),
+            detail: format!(
+                "{:.0} MB in {:.0} ms",
+                bytes as f64 / 1e6,
+                t3.elapsed().as_secs_f64() * 1e3
+            ),
         });
     }
     Ok(())
@@ -242,14 +362,24 @@ pub fn peak_rss_mb() -> f64 {
         libc::getrusage(libc::RUSAGE_SELF, &mut u);
         // bytes on macOS, KiB on Linux
         let v = u.ru_maxrss as f64;
-        if cfg!(target_os = "macos") { v / 1e6 } else { v * 1024.0 / 1e6 }
+        if cfg!(target_os = "macos") {
+            v / 1e6
+        } else {
+            v * 1024.0 / 1e6
+        }
     }
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
         use windows_sys::Win32::System::Threading::GetCurrentProcess;
         let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
         c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-        if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 { c.PeakWorkingSetSize as f64 / 1e6 } else { 0.0 }
+        if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 {
+            c.PeakWorkingSetSize as f64 / 1e6
+        } else {
+            0.0
+        }
     }
 }

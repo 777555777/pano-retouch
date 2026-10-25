@@ -32,6 +32,9 @@
   sharp as with a cube map. The visible-tile set must cover the whole u footprint there.
 - **Tiles:** 512×512 + 1 px gutter (x wraps, y clamps) → 514² slots; levels down to ~3000 px width,
   coarser views use the base texture.
+- **Levels** are ⌈w/2⌉ × ⌈h/2⌉; odd sizes are reduced **area-weighted** (fractional weights) so pixel
+  centres stay at (i + 0.5)/n on every level – a plain 2×2 average misaligned the levels by up to ~5
+  full-resolution pixels at the nadir (found in spike S2).
 - **Wire format:** u8 for SDR sources (incl. 16-bit, display only), f16 for HDR. f16 doubles the bytes
   but transport is not a bottleneck (5–7 GB/s measured).
 - **Transport:** behind one interface with a per-platform backend – **WebView2 shared buffers on

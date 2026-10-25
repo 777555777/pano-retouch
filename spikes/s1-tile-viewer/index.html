@@ -51,8 +51,11 @@
         <label><input type="checkbox" id="aniso" checked /> pole taps</label>
         <label><input type="checkbox" id="debug" /> level tint (D)</label>
       </div>
+      <label>tool <select id="tool"><option value="navigate">navigate (V)</option><option value="mask">mask brush (B)</option><option value="clone">clone stamp (S, ⌥-click = source)</option></select></label>
+      <label>brush hardness <input type="number" id="hardness" value="0.6" step="0.1" min="0" max="1" /></label>
       <div class="row">
         <button id="bopen">Bench open</button>
+        <button id="bbrush">Bench brush</button>
         <button id="bpath">Bench path</button>
         <button id="btransport">Bench transport</button>
       </div>
@@ -60,7 +63,7 @@
         <button id="clear">Clear cache</button>
         <button id="copy">Copy log</button>
       </div>
-      <div class="hint">drag = look · wheel = zoom · 1 = 1:1 · 0 = horizon · n = nadir · h = hide UI</div>
+      <div class="hint">drag = look (with a tool: right-drag / space) · [ ] = brush size · wheel = zoom · 1 = 1:1 · 0 = horizon · n = nadir · h = hide UI</div>
     </div>
     <div id="hud" class="panel"></div>
     <pre id="log" class="panel"></pre>

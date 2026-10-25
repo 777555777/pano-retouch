@@ -26,7 +26,17 @@ export interface RenderParams {
 }
 
 const MAX_GRIDS = 64;
-const UNIFORM_WORDS = 32 + MAX_GRIDS * 4 * 2;
+const GRID_OFFSET = 44; // words before the grid arrays
+const UNIFORM_WORDS = GRID_OFFSET + MAX_GRIDS * 4 * 2;
+
+/** S2: brush cursor / stroke preview state passed to the shader. */
+export interface BrushParams {
+  cursor: [number, number, number] | null;
+  radius: number; // radians
+  source: [number, number, number] | null;
+  strokeCount: number;
+  baseVersion: number;
+}
 
 export class Renderer {
   device!: GPUDevice;
@@ -51,6 +61,10 @@ export class Renderer {
   private pages?: GPUBuffer;
   private slotTime?: GPUBuffer;
   private bindGroup?: GPUBindGroup;
+  private strokeBuf?: GPUBuffer;
+  private chunkBuf?: GPUBuffer;
+  private pointBuf?: GPUBuffer;
+  private slotVersion?: GPUBuffer;
   private samplerClamp!: GPUSampler;
   private samplerRepeat!: GPUSampler;
   slot = 514;
@@ -125,10 +139,16 @@ export class Renderer {
       size: Math.max(16, this.slots * 4),
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
+    this.slotVersion?.destroy();
+    this.slotVersion = this.device.createBuffer({
+      size: Math.max(16, this.slots * 4),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    if (!this.strokeBuf) this.writeStrokes(new Uint8Array(64), new Uint8Array(32), new Float32Array(8));
     if (opts.grids.length > MAX_GRIDS) throw new Error("too many grids");
     opts.grids.forEach((g, i) => {
-      this.uu.set([g.offset, g.tilesX, g.tilesY, 0], 32 + i * 4);
-      this.uf.set([g.w, g.h, 0, 0], 32 + MAX_GRIDS * 4 + i * 4);
+      this.uu.set([g.offset, g.tilesX, g.tilesY, 0], GRID_OFFSET + i * 4);
+      this.uf.set([g.w, g.h, 0, 0], GRID_OFFSET + MAX_GRIDS * 4 + i * 4);
     });
     this.uu.set([opts.levels, opts.slot, opts.slot - 2, 0], 24);
     this.uf.set([opts.level0H, opts.cube0N, opts.baseH, 0], 28);
@@ -157,8 +177,32 @@ export class Renderer {
     this.rebind();
   }
 
+  /** S2: stroke, chunk and point arrays (grown as needed). */
+  writeStrokes(strokes: Uint8Array, chunks: Uint8Array, points: Float32Array): void {
+    const ensure = (buf: GPUBuffer | undefined, bytes: number): [GPUBuffer, boolean] => {
+      if (buf && buf.size >= bytes) return [buf, false];
+      buf?.destroy();
+      const size = Math.max(256, 2 ** Math.ceil(Math.log2(bytes)));
+      return [this.device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }), true];
+    };
+    const [s, a] = ensure(this.strokeBuf, Math.max(64, strokes.byteLength));
+    const [c, b] = ensure(this.chunkBuf, Math.max(32, chunks.byteLength));
+    const [p, d] = ensure(this.pointBuf, Math.max(32, points.byteLength));
+    this.strokeBuf = s;
+    this.chunkBuf = c;
+    this.pointBuf = p;
+    if (strokes.byteLength) this.device.queue.writeBuffer(s, 0, strokes);
+    if (chunks.byteLength) this.device.queue.writeBuffer(c, 0, chunks);
+    if (points.byteLength) this.device.queue.writeBuffer(p, 0, points);
+    if (a || b || d) this.rebind();
+  }
+
+  writeSlotVersions(v: Uint32Array): void {
+    this.device.queue.writeBuffer(this.slotVersion!, 0, v);
+  }
+
   private rebind(): void {
-    if (!this.atlas || !this.base || !this.pages || !this.slotTime) return;
+    if (!this.atlas || !this.base || !this.pages || !this.slotTime || !this.strokeBuf || !this.slotVersion) return;
     this.bindGroup = this.device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
       entries: [
@@ -169,6 +213,10 @@ export class Renderer {
         { binding: 4, resource: this.base.createView() },
         { binding: 5, resource: this.samplerClamp },
         { binding: 6, resource: this.samplerRepeat },
+        { binding: 7, resource: { buffer: this.strokeBuf } },
+        { binding: 8, resource: { buffer: this.chunkBuf! } },
+        { binding: 9, resource: { buffer: this.pointBuf! } },
+        { binding: 10, resource: { buffer: this.slotVersion } },
       ],
     });
   }
@@ -200,7 +248,7 @@ export class Renderer {
     }
   }
 
-  render(p: RenderParams): void {
+  render(p: RenderParams, brush?: BrushParams): void {
     if (!this.bindGroup) return;
     const w = this.canvas.width, h = this.canvas.height;
     const b = basis(p.view);
@@ -208,6 +256,11 @@ export class Renderer {
     this.uf.set([...b.f, 0, ...b.r, 0, ...b.u, 0, (w / h) * tan, tan, w, h], 0);
     this.uf.set([p.time, p.fade, p.bias, p.cube ? 1 : 0, p.exposure, p.linear ? 1 : 0, p.aniso ? 1 : 0,
       p.debug ? 1 : 0], 16);
+    const bc = brush?.cursor;
+    this.uf.set([bc?.[0] ?? 0, bc?.[1] ?? 0, bc?.[2] ?? 0, bc ? brush!.radius : 0], 32);
+    const bs = brush?.source;
+    this.uf.set([bs?.[0] ?? 0, bs?.[1] ?? 0, bs?.[2] ?? 0, bs ? 1 : 0], 36);
+    this.uu.set([brush?.strokeCount ?? 0, brush?.baseVersion ?? 0, 0, 0], 40);
     this.device.queue.writeBuffer(this.uniform, 0, this.u);
     const enc = this.device.createCommandEncoder();
     const measure = this.querySet && !this.queryBusy;

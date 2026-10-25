@@ -35,6 +35,17 @@ Also new: tiles are built in one pass directly in the wire format, mimalloc as a
 transport benchmark includes a "null" payload (pure transport, no tile work) and batches of 8 tiles,
 and peak memory is reported on Windows.
 
+## Spike S2 – brush round trip ([issue #2](https://github.com/777555777/pano-retouch/issues/2))
+
+Mask brush (`B`) and clone stamp (`S`, ⌥/Alt-click sets the source) on the sphere: GPU preview while
+painting, full-resolution rasterisation in Rust on release (`src-tauri/src/edit.rs`), changed tiles are
+replaced in place using edit versions. Size with `[` `]`; with a tool active, look around with right-drag
+or space-drag. A synthetic panorama (`synthetic 24000×12000`, public) is in the file list.
+
+Automatic run: `S1_AUTO_MODE=brush S1_AUTO="synthetic:24000,Panorama edited.jpg" pnpm tauri dev`
+(`S2_ONLY=<part of a scenario name>` runs a single stroke). Headless: `s1-bench --strokes <file>`,
+`s1-bench --golden <dir>`.
+
 ## Running
 
 Requirements: Rust (stable), Node 20+, pnpm. Test images are read from `PANO_TESTDATA`

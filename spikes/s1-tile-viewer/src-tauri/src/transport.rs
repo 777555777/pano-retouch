@@ -12,7 +12,10 @@ pub fn null_payload(n: usize) -> Vec<u8> {
 
 /// Several results in one body: per item `[u32 len][u32 status][bytes, padded to 8]`.
 pub fn pack_batch(items: Vec<Result<Vec<u8>, (u16, String)>>) -> Vec<u8> {
-    let total: usize = items.iter().map(|r| 8 + r.as_ref().map(|b| b.len().next_multiple_of(8)).unwrap_or(0)).sum();
+    let total: usize = items
+        .iter()
+        .map(|r| 8 + r.as_ref().map(|b| b.len().next_multiple_of(8)).unwrap_or(0))
+        .sum();
     let mut out = Vec::with_capacity(total);
     for r in items {
         match r {
@@ -48,7 +51,12 @@ pub mod ws {
         let mut s = String::new();
         for _ in 0..2 {
             let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+            h.write_u128(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+            );
             s.push_str(&format!("{:016x}", h.finish()));
         }
         s
@@ -68,16 +76,22 @@ pub mod ws {
             let (token, handler) = (token.clone(), handler.clone());
             tokio::spawn(async move {
                 let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
-                    let ok = req.uri().query().is_some_and(|q| q == format!("token={token}"));
+                    let ok = req
+                        .uri()
+                        .query()
+                        .is_some_and(|q| q == format!("token={token}"));
                     if ok {
                         Ok(resp)
                     } else {
                         let mut r = ErrorResponse::new(Some("forbidden".into()));
-                        *r.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::FORBIDDEN;
+                        *r.status_mut() =
+                            tokio_tungstenite::tungstenite::http::StatusCode::FORBIDDEN;
                         Err(r)
                     }
                 };
-                let Ok(ws) = tokio_tungstenite::accept_hdr_async(stream, check).await else { return };
+                let Ok(ws) = tokio_tungstenite::accept_hdr_async(stream, check).await else {
+                    return;
+                };
                 let (mut sink, mut source) = ws.split();
                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
                 let writer = tokio::spawn(async move {
@@ -89,7 +103,9 @@ pub mod ws {
                 });
                 while let Some(Ok(msg)) = source.next().await {
                     let Message::Text(text) = msg else { continue };
-                    let Some((id, path)) = text.split_once(' ') else { continue };
+                    let Some((id, path)) = text.split_once(' ') else {
+                        continue;
+                    };
                     let id: u32 = id.parse().unwrap_or(0);
                     let (path, handler, tx) = (path.to_string(), handler.clone(), tx.clone());
                     tokio::task::spawn_blocking(move || {
@@ -128,7 +144,10 @@ pub fn write_shared(slots: &SharedSlots, slot: usize, bytes: &[u8]) -> Result<u3
 }
 
 #[cfg(windows)]
-pub fn create_shared(webview: &tauri::Webview, sizes: Vec<usize>) -> Result<Vec<(usize, usize)>, String> {
+pub fn create_shared(
+    webview: &tauri::Webview,
+    sizes: Vec<usize>,
+) -> Result<Vec<(usize, usize)>, String> {
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use windows::core::{HSTRING, Interface, PCWSTR};
     let (tx, rx) = std::sync::mpsc::channel();
@@ -163,6 +182,9 @@ pub fn create_shared(webview: &tauri::Webview, sizes: Vec<usize>) -> Result<Vec<
 }
 
 #[cfg(not(windows))]
-pub fn create_shared(_webview: &tauri::Webview, _sizes: Vec<usize>) -> Result<Vec<(usize, usize)>, String> {
+pub fn create_shared(
+    _webview: &tauri::Webview,
+    _sizes: Vec<usize>,
+) -> Result<Vec<(usize, usize)>, String> {
     Err("shared buffers are a WebView2 (Windows) feature".into())
 }

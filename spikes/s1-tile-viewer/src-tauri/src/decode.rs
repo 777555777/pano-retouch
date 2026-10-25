@@ -16,9 +16,17 @@ pub enum Kind {
     Jpeg,
     Tiff,
     Exr,
+    /// generated test panorama (`synthetic:<width>`), safe to publish
+    Synthetic,
 }
 
 pub fn kind_of(path: &Path) -> Option<Kind> {
+    if path
+        .to_str()
+        .is_some_and(|p| p.starts_with(crate::synthetic::PREFIX))
+    {
+        return Some(Kind::Synthetic);
+    }
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "jpg" | "jpeg" => Some(Kind::Jpeg),
@@ -45,8 +53,16 @@ pub fn probe(path: &Path) -> Result<Probe> {
                 (d.width() as u32, d.height() as u32)
             };
             #[cfg(not(feature = "native"))]
-            let (w, h) = { let l = jpeg_zune(path)?; (l.width, l.height) };
-            Ok(Probe { kind, width: w, height: h, storage: Storage::U8 })
+            let (w, h) = {
+                let l = jpeg_zune(path)?;
+                (l.width, l.height)
+            };
+            Ok(Probe {
+                kind,
+                width: w,
+                height: h,
+                storage: Storage::U8,
+            })
         }
         Kind::Tiff => {
             let mut d = tiff_decoder(path)?;
@@ -56,12 +72,33 @@ pub fn probe(path: &Path) -> Result<Probe> {
                 tiff::ColorType::RGB(16) | tiff::ColorType::RGBA(16) => Storage::U16,
                 c => return Err(format!("unsupported TIFF colour type {c:?}")),
             };
-            Ok(Probe { kind, width, height, storage })
+            Ok(Probe {
+                kind,
+                width,
+                height,
+                storage,
+            })
+        }
+        Kind::Synthetic => {
+            let w = crate::synthetic::width_of(path.to_str().unwrap_or(""))
+                .ok_or("bad synthetic size")?;
+            Ok(Probe {
+                kind,
+                width: w,
+                height: w / 2,
+                storage: Storage::U8,
+            })
         }
         Kind::Exr => {
-            let meta = exr::meta::MetaData::read_from_file(path, false).map_err(|e| e.to_string())?;
+            let meta =
+                exr::meta::MetaData::read_from_file(path, false).map_err(|e| e.to_string())?;
             let size = meta.headers.first().ok_or("no EXR layer")?.layer_size;
-            Ok(Probe { kind, width: size.width() as u32, height: size.height() as u32, storage: Storage::F16 })
+            Ok(Probe {
+                kind,
+                width: size.width() as u32,
+                height: size.height() as u32,
+                storage: Storage::F16,
+            })
         }
     }
 }
@@ -81,6 +118,9 @@ pub fn decode_full(path: &Path, kind: Kind, jpeg: JpegDecoder) -> Result<Level> 
         (Kind::Jpeg, JpegDecoder::Zune) => jpeg_zune(path),
         (Kind::Tiff, _) => tiff_parallel(path),
         (Kind::Exr, _) => exr_rgba(path),
+        (Kind::Synthetic, _) => Ok(crate::synthetic::generate(
+            crate::synthetic::width_of(path.to_str().unwrap_or("")).ok_or("bad size")?,
+        )),
     }
 }
 
@@ -104,7 +144,11 @@ fn jpeg_turbo(path: &Path, scale_num: u8) -> Result<Level> {
     let mut buf = vec![0u8; w * h * 4];
     s.read_scanlines_into(&mut buf).map_err(|e| e.to_string())?;
     s.finish().map_err(|e| e.to_string())?;
-    Ok(Level { width: w as u32, height: h as u32, px: Pixels::U8(buf) })
+    Ok(Level {
+        width: w as u32,
+        height: h as u32,
+        px: Pixels::U8(buf),
+    })
 }
 
 fn jpeg_zune(path: &Path) -> Result<Level> {
@@ -115,10 +159,17 @@ fn jpeg_zune(path: &Path) -> Result<Level> {
         .jpeg_set_out_colorspace(ColorSpace::RGBA)
         .set_max_width(1 << 16)
         .set_max_height(1 << 16);
-    let mut d = zune_jpeg::JpegDecoder::new_with_options(zune_jpeg::zune_core::bytestream::ZCursor::new(&data), opts);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(
+        zune_jpeg::zune_core::bytestream::ZCursor::new(&data),
+        opts,
+    );
     let px = d.decode().map_err(|e| format!("{e:?}"))?;
     let info = d.info().ok_or("no info")?;
-    Ok(Level { width: info.width as u32, height: info.height as u32, px: Pixels::U8(px) })
+    Ok(Level {
+        width: info.width as u32,
+        height: info.height as u32,
+        px: Pixels::U8(px),
+    })
 }
 
 fn tiff_decoder(path: &Path) -> Result<tiff::decoder::Decoder<BufReader<File>>> {
@@ -184,7 +235,11 @@ fn tiff_parallel(path: &Path) -> Result<Level> {
         16 => Pixels::U16(run::<u16>(path, w, h, spp, rows_per_strip, 65535)?),
         b => return Err(format!("unsupported bit depth {b}")),
     };
-    Ok(Level { width: w as u32, height: h as u32, px })
+    Ok(Level {
+        width: w as u32,
+        height: h as u32,
+        px,
+    })
 }
 
 fn exr_rgba(path: &Path) -> Result<Level> {
@@ -202,5 +257,9 @@ fn exr_rgba(path: &Path) -> Result<Level> {
     .map_err(|e| e.to_string())?;
     let size = img.layer_data.size;
     let (_, px) = img.layer_data.channel_data.pixels;
-    Ok(Level { width: size.width() as u32, height: size.height() as u32, px: Pixels::F16(px) })
+    Ok(Level {
+        width: size.width() as u32,
+        height: size.height() as u32,
+        px: Pixels::F16(px),
+    })
 }
