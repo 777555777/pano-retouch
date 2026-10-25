@@ -21,7 +21,7 @@ when the committed result replaces the preview?
 | --- | --- | --- |
 | Preview while painting | < 16 ms per frame | 60 fps, JS ≈ 1 ms per frame, GPU p95 ≤ 1.6 ms |
 | Full-res commit of a typical stroke | < 300 ms, UI never blocks | **40–60 ms** in Rust (r ≤ 2°, 30° long), result on screen after **60–90 ms**; large strokes 0.3 s, a 32 MP scribble 1.1 s – always asynchronous, the UI keeps running at 60 fps |
-| No offset/flicker preview → result | maintainer sign-off | pixel diff of the frame before/after the hand-over: **masks ≤ 5/255**, clone ≤ 17/255 on real photos (≤ 25 pixels above 8/255); no offset – see below. Maintainer painted interactively (masks + clone, synthetic panorama): no visible jump |
+| No offset/flicker preview → result | maintainer sign-off | pixel diff of the frame before/after the hand-over: **masks ≤ 5/255**, clone ≤ 17/255 on real photos (≤ 25 pixels above 8/255); no offset – see below. Maintainer painted interactively (masks + clone, synthetic panorama) and made a screen recording (kept locally): no visible jump |
 | Seam and both poles correct | golden image test | unit tests (brute-force reference, seam, nadir, wrapping gutters) + golden images below |
 
 ## How it works
@@ -134,6 +134,18 @@ Natural strokes were much bigger than the scripted ones: 0.15–13 MP per stroke
 visible), single big strokes with 36–64 MP took 1.2–2.0 s. Painting stayed fluid because the commit is asynchronous,
 but **rasterisation speed matters more than the "typical stroke" assumption suggested**.
 
+A second interactive session shows **where** the time goes:
+
+| Stroke | Points | Changed area | Rasterisation | Throughput |
+| --- | --- | --- | --- | --- |
+| single dab | 1 | 7.3 MP | 34 ms | ~210 MP/s |
+| short strokes | 4–6 | 15–21 MP | 97–173 ms | ~100–150 MP/s |
+| long strokes | 100–260 | 31–72 MP | 1.5–3.0 s | ~20–30 MP/s |
+
+Writing pixels is fast; the cost is the per-pixel search over many nearby segments of long strokes.
+A rasteriser that walks each segment's band (capsule) instead of testing segments per pixel – or that
+evaluates a distance field once per stroke – removes exactly this term.
+
 ## Things learned the hard way
 
 1. **Odd image sizes misaligned the pyramid (bug from S1).** Halving 11 899 rows with a plain 2×2 average
@@ -156,9 +168,10 @@ but **rasterisation speed matters more than the "typical stroke" assumption sugg
   machinery stays the same.
 - **Masks as their own channel:** the spike bakes the mask tint into the image data to measure the round
   trip; in the product masks are separate single-channel tiles (same pipeline).
-- **Faster rasterisation** – needed: the maintainer's real strokes were 5–60 MP. Options: f32/SIMD on
-  the CPU (≈ 2–4×), rasterising only the segment's band per row instead of testing chunks per pixel, or a
-  compute shader in the core (wgpu). Target ≥ 100 MP/s so that big strokes land in < 0.5 s (E2.x).
+- **Faster rasterisation** – needed: the maintainer's real strokes were 5–70 MP. The bottleneck is the
+  per-pixel segment search for long strokes (dabs already reach ~210 MP/s). Options: per-segment capsule
+  rasterisation with a running minimum, a per-stroke distance field, f32/SIMD, or a compute shader in the
+  core (wgpu). Target ≥ 100 MP/s for long strokes so that big strokes land in < 0.5 s (E2.x).
 - **Base texture after a commit:** update only the changed region and don't wait for it.
 - Pressure, spacing/flow and accumulation ("build-up") brushes – UX work for M2.
 
