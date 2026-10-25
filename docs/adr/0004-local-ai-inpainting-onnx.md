@@ -47,12 +47,13 @@
 
 ## Spike S3 (2026-10-26)
 
-- **Default without a model: PatchMatch + full-resolution texture pass.** Best result in the maintainer's
-  review (snow nadir), no download, no licence question, ~2 s (M4 Max) / ~6.5 s (i7-12700K) per region.
-- **Optional model: LaMa** (Big-LaMa ONNX export, 208 MB, fixed 512×512), always followed by the texture
-  pass (PatchMatch matching low frequencies, copying original pixels) – plain LaMa is a soft disc at
-  300 MP; with the pass it is sharp but can look repetitive. Use it where structure must continue.
-- **MI-GAN not offered for now** (worst in the review), re-evaluate on other scenes later.
+- **No method wins on every scene** (maintainer review): LaMa + full-resolution texture pass is best on
+  asphalt and good on snow, PatchMatch + texture pass best on uniform snow. → **Offer both:** LaMa +
+  texture as the default when the optional model is installed, PatchMatch + texture without a model; the
+  user can switch per region. Plain LaMa (512 px model) and plain PatchMatch are too soft at 300 MP.
+- **Before shipping:** a less repetitive texture pass and an invisible boundary (gradient-domain blending,
+  irregular mask edge) – the perfect circle of the cap stood out in three of four scenes.
+- **MI-GAN not offered for now** (smears or hallucinates), re-evaluate on other scenes later.
 - **Execution:** `ort` 2.0 / ONNX Runtime 1.31 on the **CPU**: CoreML is slower and needs 9 GB (note: `ort`
   registers CoreML by default unless the CPU policy is set); DirectML fails at run time on LaMa's FFT
   block. Per region LaMa + texture ~1.5–5 s (M4 Max) / ~7.4 s (i7-12700K), + model load 3 s / 7–8 s once.
