@@ -141,8 +141,10 @@ Inpainting models work on flat, undistorted images. Hence, invisible to the user
    original stays bit-exact outside the mask.
 5. Store the result as a raster artefact of the operation (non-deterministic, see functional spec).
 
-Open points: resolution limits of models (large masks → tiling or upscaling), 16-bit/HDR inputs (models
-work in 8-bit sRGB → tone mapping/detail transfer needed).
+Spike S3: models work at 512 px, so a **full-resolution texture pass** follows (PatchMatch matching low
+frequencies, copying original pixels from the surroundings); HDR is tone-mapped (exposure from the
+context, Reinhard + gamma) and mapped back exactly. Default fill without a model: PatchMatch + texture
+pass; LaMa optional. See [spike S3](spikes/s3-inpaint.md).
 
 ### 4.7 Project & sidecar format (`pano-project`)
 

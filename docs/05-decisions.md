@@ -100,3 +100,13 @@ document they were carried into. Architecture decisions live in the [ADRs](adr/)
 | X2 | Tile transport | One interface, per-platform backend: WebView2 shared buffers on Windows, custom URI scheme on macOS, loopback WebSocket as fallback. | ADR-0003, [spike report](spikes/s1-tile-viewer.md) |
 | X3 | Tile format on the wire | u8 for SDR sources, f16 for HDR; tiles built in one pass in the wire format. | ADR-0003 |
 | X4 | Open performance work | Windows decode times (EXR, 16-bit TIFF), disk-cache size for 16-bit sources → E1.3. | spike report, ADR-0003 open points |
+
+## Round 8 – Spike S3 results (2026-10-26)
+
+| # | Topic | Decision | Carried into |
+| --- | --- | --- | --- |
+| Z1 | Default nadir fill | PatchMatch + full-resolution texture pass, no model (best in the maintainer's review). | [spike report](spikes/s3-inpaint.md), ADR-0004 |
+| Z2 | AI model | LaMa as optional download (208 MB), always with the texture pass; MI-GAN not offered for now. | ADR-0004 |
+| Z3 | Execution provider | CPU on macOS and Windows (CoreML slower, DirectML fails on LaMa). | ADR-0004 |
+| Z4 | Follow-up | Texture pass must become less repetitive; keep a little natural irregularity. | spike report |
+

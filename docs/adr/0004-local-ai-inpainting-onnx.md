@@ -1,6 +1,6 @@
 # ADR-0004: Local AI inpainting via ONNX Runtime
 
-- Status: Proposed (model choice open, spike S3)
+- Status: Proposed – recommendation from [spike S3](../spikes/s3-inpaint.md) (macOS + Windows, maintainer-reviewed); ready to be accepted
 - Date: 2026-10-10
 
 ## Context
@@ -44,3 +44,19 @@
 - + Good quality, offline, exchangeable models.
 - − ONNX Runtime increases the app size (native library per platform).
 - − 16-bit/HDR requires tone mapping before and detail/colour restoration after inference.
+
+## Spike S3 (2026-10-26)
+
+- **Default without a model: PatchMatch + full-resolution texture pass.** Best result in the maintainer's
+  review (snow nadir), no download, no licence question, ~2 s (M4 Max) / ~6.5 s (i7-12700K) per region.
+- **Optional model: LaMa** (Big-LaMa ONNX export, 208 MB, fixed 512×512), always followed by the texture
+  pass (PatchMatch matching low frequencies, copying original pixels) – plain LaMa is a soft disc at
+  300 MP; with the pass it is sharp but can look repetitive. Use it where structure must continue.
+- **MI-GAN not offered for now** (worst in the review), re-evaluate on other scenes later.
+- **Execution:** `ort` 2.0 / ONNX Runtime 1.31 on the **CPU**: CoreML is slower and needs 9 GB (note: `ort`
+  registers CoreML by default unless the CPU policy is set); DirectML fails at run time on LaMa's FFT
+  block. Per region LaMa + texture ~1.5–5 s (M4 Max) / ~7.4 s (i7-12700K), + model load 3 s / 7–8 s once.
+- **HDR:** exposure from the context median, Reinhard + gamma, exact inverse – fill within a few percent
+  of the surroundings, no colour cast.
+- **Licences:** LaMa Apache-2.0, MI-GAN MIT; both trained on Places2/Places365 (non-commercial image
+  terms, effect on weights unsettled) → models stay an optional download with a notice in the dialog.
