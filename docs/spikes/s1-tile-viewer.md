@@ -4,7 +4,7 @@
 - Code: branch `spike/s1-tile-viewer`, folder [`spikes/s1-tile-viewer/`](https://github.com/777555777/pano-retouch/tree/spike/s1-tile-viewer/spikes/s1-tile-viewer)
   (throw-away, not merged into the product)
 - Date: 2026-10-24
-- Status: **macOS measured; Windows (RTX 5080) still to be measured**
+- Status: **macOS: all budgets met. Windows: rendering fine, but tile transport through WebView2 is the bottleneck – follow-up needed**
 
 ## Question
 
@@ -115,6 +115,44 @@ Transport is not a bottleneck on macOS. Both mechanisms are equivalent; the URI 
 because requests can be aborted (`AbortController`) and server timing comes back as a header. f16 costs
 twice the bytes but stays far above what the viewer needs (a 5K screen at 1:1 needs ~60 tiles).
 
+## Windows (i7-12700K, RTX 5080, WebView2 / Edge 155) – first run 2026-10-25
+
+Same code, automatic run with the 283 MP JPEG, 16-bit TIFF and EXR, canvas 1600×1000. WebGPU works
+(adapter "nvidia blackwell", `maxTextureArrayLayers` 2048).
+
+| | JPEG | 16-bit TIFF | EXR | Budget |
+| --- | --- | --- | --- | --- |
+| First view | 970 ms | **3050 ms** | **4658 ms** | < 1 s / < 2 s |
+| Sharp | 2422 ms | **3783 ms** | **6843 ms** | < 3 s |
+| From cache: first / sharp | 265 / 882 ms | 666 / **1166** ms | 516 / **1750** ms | < 1 s |
+| Rust: full decode / pyramid | 1111 / 116 ms | 2169 / 315 ms | 3613 / 492 ms | (macOS: 763/29, 1179/46, 653/54) |
+| Navigation | 60 fps (a few frames up to 67 ms in the 1:1 zoom) | 60 fps | 60 fps | 60 fps |
+| Longest wait of a needed tile | 1.6 s | 1.9 s | 3.4 s | briefly |
+
+**Tile transport is ~40× slower than on macOS:**
+
+| Transport | u8, 1 at a time | u8, 8 parallel | f16, 8 parallel |
+| --- | --- | --- | --- |
+| custom URI scheme | 56 MB/s, 11 ms/tile | 144 MB/s, 57 ms/tile | 143 MB/s |
+| `ipc::Response` | 92 MB/s, 11 ms/tile | 167 MB/s, 51 ms/tile | 141 MB/s |
+| (macOS for comparison) | 1.1–1.6 GB/s, 1 ms | 5.3 GB/s | 7.2–7.7 GB/s |
+
+Interpretation:
+
+- Rendering is not the problem (60 fps, JS work 3–7 ms per frame). The long tile waits at 1:1 (up to
+  180 missing tiles) and the slow first view after the decode (base texture of 11–22 MB takes
+  120–550 ms to arrive) come from **WebView2's resource/IPC path**, which copies response bodies through
+  COM streams. Both Tauri mechanisms use it, so switching between them does not help.
+- The Rust side is also 1.5–7× slower (memory-bound steps like the pyramid and the EXR decode are hit
+  hardest; Windows Defender scanning large files may add to it). Headless `s1-bench` numbers on Windows
+  are still needed to separate CPU/disk from transport.
+
+Follow-up (spike S1b, before E1.4): measure alternative transports on Windows – WebView2 **shared
+buffers** (`CreateSharedBuffer` / `PostSharedBufferToScript`, zero-copy, reachable via wry's
+`with_webview` and `webview2-com`), a **loopback WebSocket** with a session token, **batching**
+several tiles per response, and **compressed tiles** (e.g. LZ4 decoded in the page, or GPU block
+compression BC7) to cut bytes. Target: ≥ 1 GB/s or ≤ 5 ms per tile.
+
 ## Atlas vs cube map
 
 Both were implemented on the same virtual-texturing core (page table + tile array); the cube variant
@@ -154,8 +192,8 @@ sync. The cube code is removed after the spike.
 
 ## Not covered / open
 
-- **Windows (RTX 5080, WebView2)**: must still be measured – same code, see the spike README
-  (`S1_AUTO=…`). Peak RSS is not reported on Windows yet (use Task Manager).
+- **Windows transport** (see the Windows section) – follow-up spike S1b. Peak RSS is not reported on
+  Windows yet (use Task Manager); headless `s1-bench` numbers on Windows are missing.
 - **Cold file cache** numbers (see caveat above).
 - **Comparison with Photoshop/Affinity** – maintainer task [#6](https://github.com/777555777/pano-retouch/issues/6).
 - **Colour management**: the viewer shows source values without conversion (ProPhoto/Adobe RGB look

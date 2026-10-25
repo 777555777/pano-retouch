@@ -34,7 +34,8 @@
   coarser views use the base texture.
 - **Wire format:** u8 for SDR sources (incl. 16-bit, display only), f16 for HDR. f16 doubles the bytes
   but transport is not a bottleneck (5–7 GB/s measured).
-- **Transport:** custom URI scheme (abortable requests); `ipc::Response` is equally fast.
+- **Transport:** custom URI scheme (abortable requests); `ipc::Response` is equally fast on macOS.
+  On Windows both are far too slow – see open points.
 - Rejected: cube-map LOD – needs a second tile representation (memory or on-demand resampling) that every
   edit would have to keep in sync; at a 5K canvas it loaded noticeably slower.
 
@@ -43,7 +44,9 @@
 - Disk-cache format for 16-bit sources: LZ4 barely compresses u16 (≈ 3 GB per 283 MP image) – evaluate
   zstd / predictor, or a separate display pyramid (E1.3).
 - Colour management: working space = source profile, conversion only for display.
-- Windows numbers (WebView2) still outstanding.
+- **Windows:** WebView2 delivers only ~150 MB/s through the custom URI scheme / IPC (macOS 5–7 GB/s) –
+  the transport mechanism must be re-evaluated on Windows (spike S1b: shared buffers, WebSocket, batching,
+  compression) before this ADR is accepted.
 
 ## Consequences
 
