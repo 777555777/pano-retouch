@@ -48,7 +48,7 @@
 ## Spike S3 (2026-10-26)
 
 - **Default without a model: PatchMatch + full-resolution texture pass.** Best result in the maintainer's
-  review (snow nadir), no download, no licence question, 4.5–6.5 s per region.
+  review (snow nadir), no download, no licence question, ~2 s (M4 Max) / ~6.5 s (i7-12700K) per region.
 - **Optional model: LaMa** (Big-LaMa ONNX export, 208 MB, fixed 512×512), always followed by the texture
   pass (PatchMatch matching low frequencies, copying original pixels) – plain LaMa is a soft disc at
   300 MP; with the pass it is sharp but can look repetitive. Use it where structure must continue.

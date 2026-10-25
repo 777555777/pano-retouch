@@ -18,7 +18,7 @@ AGPL-3.0 project with downloadable models? How does a classic fallback compare?
 
 - **Default: PatchMatch + full-resolution texture pass, no model.** In the maintainer's review it looked
   best on the snow nadir – "maybe a little too perfect" (no stray grass blades), but clean and sharp. No
-  download, no licence question, 4.5–6.5 s per region on both reference systems.
+  download, no licence question, ~2 s (M4 Max) / ~6.5 s (i7-12700K) per region.
 - **Optional: LaMa + texture pass** for cases where structure has to be continued (e.g. a shadow running
   into the cap on asphalt). Plain LaMa is visibly too soft at 300 MP (8× upscale); the texture pass makes
   it sharp, but in the review the copied texture looked **repetitive** ("patched over an area").
