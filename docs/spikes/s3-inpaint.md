@@ -16,14 +16,15 @@ AGPL-3.0 project with downloadable models? How does a classic fallback compare?
 
 ## Short answer
 
-- **Default: PatchMatch + full-resolution texture pass, no model.** In the maintainer's review it looked
-  best on the snow nadir – "maybe a little too perfect" (no stray grass blades), but clean and sharp. No
-  download, no licence question, ~2 s (M4 Max) / ~6.5 s (i7-12700K) per region.
-- **Optional: LaMa + texture pass** for cases where structure has to be continued (e.g. a shadow running
-  into the cap on asphalt). Plain LaMa is visibly too soft at 300 MP (8× upscale); the texture pass makes
-  it sharp, but in the review the copied texture looked **repetitive** ("patched over an area").
-- **MI-GAN:** worst result in the review, but it visibly tries to integrate realistically – worth another
-  look on other scene types (MIT licence, 56 ms on DirectML), not as a default.
+- **No method wins on every scene.** In the maintainer's review of all cases: on asphalt (grain, a shadow
+  running into the cap) **LaMa + texture pass** is clearly best; on snow (case A, also HDR) **PatchMatch +
+  texture pass** looks best; on the Insta360 snow LaMa (with or without texture) is good. On the synthetic
+  panorama everything fails (expected – it is no ground texture).
+- **Two problems independent of the method:** the texture pass is **repetitive** ("you can tell an area was
+  patched"), and the **perfect circle of the cap** stands out (asphalt, Insta360, slightly on snow) – the
+  edge needs gradient-domain blending (match brightness/colour across the seam) and an irregular mask edge.
+- Plain LaMa (512 px model, 8× upscale) is too soft at 300 MP; plain PatchMatch at 1536 px too. MI-GAN
+  smears or hallucinates – at best a base for manual clone-stamping (Insta360).
 - **Speed:** every method stays below the 10 s budget per nadir region – M4 Max 1.5–5 s, i7-12700K
   6.5–7.4 s – plus a one-off model load of 3 s (Mac) / 7–8 s (Windows) per session for LaMa.
 - **GPU providers don't help LaMa:** CoreML is slower and needs 9 GB, DirectML fails at run time on
@@ -71,11 +72,14 @@ the review.
 
 ### Quality
 
-**Maintainer review (case A, snow, local files):** MI-GAN worst, but it "tries to integrate very
-realistically – could be interesting depending on the scene"; LaMa visibly soft; LaMa + texture sharper
-and better, but "rather repetitive – you notice it was patched over an area"; **PatchMatch looks best**,
-"maybe a little too perfect, because here and there a blade of grass sticks out beyond the footprints";
-the difference between PatchMatch with and without texture is hard to see on white snow.
+**Maintainer review (all cases, local files):**
+
+| Case | LaMa | LaMa + texture | MI-GAN | PatchMatch | PatchMatch + texture | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| A snow (+ HDR) | soft | sharper and better, but repetitive ("patched over an area") | worst, oddly realistic integration | – | **best**, "maybe a little too perfect" (no stray grass blade) | PatchMatch + texture |
+| B asphalt | soft, not usable | **clearly more usable**, still a bit repetitive | smeared, a worse base than LaMa + texture | soft, not usable | better, but repetitive, blurry in places, **the perfect circle shows** | **LaMa + texture** |
+| C Insta360 snow | quite good, slight transitions | about the same | half usable (needs clone-stamping), adds an odd branch | ok, but the circle shows at the top | ok, circle shows | LaMa |
+| S synthetic | blurry | broken | strange artefacts | best of a bad lot | broken, still the best of three | none usable |
 
 My own assessment of all cases:
 
@@ -175,10 +179,9 @@ that is legally unsettled. Because the app does not bundle the models, users dec
 
 ## Not covered / open
 
-- Maintainer review of cases B (asphalt) and C (Insta360) – the review covered case A.
 - LaMa on the Windows GPU: CUDA instead of DirectML would need a multi-GB CUDA/cuDNN install; not worth it
   while the CPU stays within budget.
-- Diversity in the texture pass (repetition), see recommendation.
+- Diversity in the texture pass and seam blending (see recommendation) – not implemented in the spike.
 - Larger LaMa resolutions (the ONNX export is fixed at 512; re-exporting with dynamic shapes would need
   PyTorch and the original checkpoint) – the texture pass makes this less pressing.
 - Diffusion models (ADR-0004: later).
@@ -186,13 +189,18 @@ that is legally unsettled. Because the app does not bundle the models, users dec
 
 ## Recommendation (→ ADR-0004)
 
-- **Built-in default: PatchMatch + texture pass** (no model). Works on every platform at the same speed.
-- **Optional AI model: LaMa** (208 MB download), always with the texture pass, for structure that has to
-  continue. Run it on the **CPU** (CoreML slower, DirectML fails).
-- Product work: make the texture pass less repetitive (penalise reusing the same source region, mix
-  several candidates), optionally keep a little "noise" of the surroundings (stray grass) so fills look
-  less clean.
-- MI-GAN: not now; re-evaluate on other scene types (asphalt with lines, grass, gravel) later.
+- **Offer both fills** – which one is better depends on the ground:
+  - with the optional **LaMa** model installed: **LaMa + texture pass** as the default (best on asphalt,
+    good on snow);
+  - without a model: **PatchMatch + texture pass** (best on uniform snow);
+  - the user can switch between them for a region (cheap: 2–7 s).
+- **Required before the feature ships** (both methods):
+  1. a less repetitive texture pass (penalise reusing the same source region, mix candidates);
+  2. an invisible boundary: gradient-domain (Poisson) blending across the feather band and an irregular,
+     content-aware mask edge instead of a perfect circle.
+- The fill is a starting point: it lands in its own layer, the user refines it with the clone stamp.
+- Run models on the **CPU** (CoreML slower, DirectML fails).
+- MI-GAN: not now; re-evaluate on other scene types later.
 - Model download dialog with size and the training-data notice.
 
 ## How to reproduce

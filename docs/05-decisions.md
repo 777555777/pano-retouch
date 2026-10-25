@@ -105,8 +105,8 @@ document they were carried into. Architecture decisions live in the [ADRs](adr/)
 
 | # | Topic | Decision | Carried into |
 | --- | --- | --- | --- |
-| Z1 | Default nadir fill | PatchMatch + full-resolution texture pass, no model (best in the maintainer's review). | [spike report](spikes/s3-inpaint.md), ADR-0004 |
-| Z2 | AI model | LaMa as optional download (208 MB), always with the texture pass; MI-GAN not offered for now. | ADR-0004 |
+| Z1 | Nadir fill | No method wins everywhere: LaMa + texture pass as default when the optional model is installed (best on asphalt), PatchMatch + texture pass without a model (best on snow); switchable per region. | [spike report](spikes/s3-inpaint.md), ADR-0004 |
+| Z2 | AI model | LaMa as optional download (208 MB); MI-GAN not offered for now. | ADR-0004 |
 | Z3 | Execution provider | CPU on macOS and Windows (CoreML slower, DirectML fails on LaMa). | ADR-0004 |
-| Z4 | Follow-up | Texture pass must become less repetitive; keep a little natural irregularity. | spike report |
+| Z4 | Required before shipping | Less repetitive texture pass; invisible boundary (gradient-domain blending, irregular mask edge instead of a perfect circle). | spike report, ADR-0004 |
 

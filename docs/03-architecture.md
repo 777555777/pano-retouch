@@ -143,8 +143,8 @@ Inpainting models work on flat, undistorted images. Hence, invisible to the user
 
 Spike S3: models work at 512 px, so a **full-resolution texture pass** follows (PatchMatch matching low
 frequencies, copying original pixels from the surroundings); HDR is tone-mapped (exposure from the
-context, Reinhard + gamma) and mapped back exactly. Default fill without a model: PatchMatch + texture
-pass; LaMa optional. See [spike S3](spikes/s3-inpaint.md).
+context, Reinhard + gamma) and mapped back exactly. LaMa + texture pass as default when the optional
+model is installed, PatchMatch + texture pass without a model. See [spike S3](spikes/s3-inpaint.md).
 
 ### 4.7 Project & sidecar format (`pano-project`)
 
