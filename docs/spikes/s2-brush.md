@@ -130,8 +130,8 @@ Same automatic run (synthetic panorama, 283 MP JPEG, 16-bit TIFF):
 
 ## The maintainer's own strokes (macOS, interactive)
 
-Natural strokes were much bigger than the scripted ones: 1–13 MP per stroke (0.1–0.8 s until visible),
-single big strokes with 36–64 MP took 1.1–1.9 s. Painting stayed fluid because the commit is asynchronous,
+Natural strokes were much bigger than the scripted ones: 0.15–13 MP per stroke (0.07–0.8 s until
+visible), single big strokes with 36–64 MP took 1.2–2.0 s. Painting stayed fluid because the commit is asynchronous,
 but **rasterisation speed matters more than the "typical stroke" assumption suggested**.
 
 ## Things learned the hard way
