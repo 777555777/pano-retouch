@@ -4,7 +4,7 @@
 - Code: branch `spike/s1-tile-viewer`, folder [`spikes/s1-tile-viewer/`](https://github.com/777555777/pano-retouch/tree/spike/s1-tile-viewer/spikes/s1-tile-viewer)
   (throw-away, not merged into the product)
 - Date: 2026-10-24
-- Status: **macOS: all budgets met. Windows: rendering fine, but tile transport through WebView2 is the bottleneck – follow-up needed**
+- Status: **macOS: all budgets met. Windows: solved with WebView2 shared buffers (spike S1b, [#14](https://github.com/777555777/pano-retouch/issues/14)); remaining gap is EXR/TIFF decode time**
 
 ## Question
 
@@ -166,6 +166,78 @@ buffers** (`CreateSharedBuffer` / `PostSharedBufferToScript`, zero-copy, reachab
 several tiles per response, and **compressed tiles** (e.g. LZ4 decoded in the page, or GPU block
 compression BC7) to cut bytes. Target: ≥ 1 GB/s or ≤ 5 ms per tile.
 
+## Addendum: spike S1b – Windows transport (2026-10-25)
+
+Issue [#14](https://github.com/777555777/pano-retouch/issues/14), branch `spike/s1b-windows-transport`. Same
+Windows PC (i7-12700K, 48 GB DDR4, RTX 5080, PCIe 3.0 NVMe), same images, canvas 1600×1000.
+
+### Transport (64 requests per row, MB/s · latency p50)
+
+| Transport | null 1 MB, 1 at a time | null 1 MB, 8 parallel | tile u8, 8 parallel | tile f16, 8 parallel | batch 8 × u8 |
+| --- | --- | --- | --- | --- | --- |
+| custom URI scheme | 44 MB/s · 11 ms | 148 MB/s | 144 MB/s · 58 ms | 150 MB/s | 113 MB/s |
+| `ipc::Response` | 87 MB/s · 12 ms | 148 MB/s | 149 MB/s · 56 ms | 144 MB/s | 126 MB/s |
+| loopback WebSocket | 811 MB/s · 0.9 ms | 1135 MB/s | 464 MB/s · 8.5 ms | 436 MB/s | 523 MB/s |
+| **WebView2 shared buffers** | 754 MB/s · 1.1 ms | 590 MB/s | **1210 MB/s · 6.4 ms** | **1874 MB/s** | 751 MB/s |
+
+- The "null" rows (no tile work at all) prove that the S1 numbers were the WebView2 resource/IPC path,
+  not Rust: ~150 MB/s no matter what is sent. Batching does not help – the cost is per byte.
+- Shared buffers: Rust writes each tile straight into memory that the page already holds (a ring of 48
+  tile slots + one 32 MB slot, posted once at start-up); only a tiny message goes through IPC. With real
+  tiles they reach 1.2–1.9 GB/s, **8–13× the S1 transport**, and meet the target (≥ 1 GB/s).
+- The WebSocket is a good portable fallback (~0.5–1.1 GB/s) but needs a local port (+ token) and is
+  slower than shared memory with real tiles.
+
+### Viewer with each transport (worst phase of the camera path)
+
+| Image | Transport | fps | longest wait of a needed tile | time with a missing tile | re-open from cache: first / sharp |
+| --- | --- | --- | --- | --- | --- |
+| 283 MP JPEG | URI scheme | 60 | 1268 ms | 2.0 s | 232 / 849 ms |
+| | WebSocket | 60 | 367 ms | 0.4 s | 49 / 483 ms |
+| | **shared buffers** | 60 | **67 ms** | 0.15 s | **33 / 300 ms** |
+| 283 MP 16-bit TIFF | URI scheme | 60 | 1501 ms | 2.5 s | 281 / 798 ms |
+| | WebSocket | 60 | 734 ms | 1.2 s | 183 / 900 ms |
+| | **shared buffers** | 60 | **183 ms** | 0.23 s | **50 / 383 ms** |
+| 283 MP EXR | URI scheme | 60 | 2752 ms | 9.3 s | 398 / 1616 ms |
+| | WebSocket | 60 | 634 ms | 0.8 s | 113 / 796 ms |
+| | **shared buffers** | 60 | **267 ms** | 0.35 s | **33 / 484 ms** |
+
+The remaining waits (≤ 267 ms) occur only in the hardest phase – zooming to 1:1 at the nadir, where up
+to 70 tiles are needed at once.
+
+### Tile path (headless `s1-bench`, Windows, one 1 MB tile)
+
+| | S1 | S1b raw + convert (mimalloc) | **S1b single pass** |
+| --- | --- | --- | --- |
+| 16-bit TIFF → u8 | 2.67 ms | 0.83 ms | **0.40 ms** |
+| 16-bit TIFF → f16 | 3.03 ms | 0.80 ms | **0.36 ms** |
+| EXR → f16 | 1.28 ms | 0.47 ms | **0.22 ms** |
+
+Building the tile in one pass directly in the wire format plus mimalloc makes the Windows tile path
+**6–8× faster**. Peak memory (now measured on Windows): 3.3 GB headless, 4.0 GB in the app (Rust
+process; the WebView2 processes come on top).
+
+### What is still over budget on Windows
+
+| | Measured | Budget | Cause |
+| --- | --- | --- | --- |
+| First view, 16-bit TIFF | 2.5 s (≈ 1.95 s with shared buffers for the base) | < 2 s | decode 1.6 s + pyramid 0.3 s |
+| First view, EXR | 4.6 s (≈ 3.2 s with shared buffers) | < 2 s | EXR decode 2.4–2.6 s (macOS 0.65 s) + pyramid 0.47 s |
+| Sharp, EXR after decode | 6.2 s (URI scheme) | < 3 s | as above + transport |
+
+These are decode problems, not display problems. Ideas for E1.3: decode EXR blocks straight into
+tiles instead of the per-pixel callback, build the base progressively while strips/blocks arrive (first
+view before the full decode), build the pyramid tile by tile, and check whether Windows Defender slows
+reading the large files.
+
+### Recommendation after S1b
+
+- **Transport behind one interface with a per-platform backend:** WebView2 shared buffers on Windows,
+  custom URI scheme on macOS (5–7 GB/s there), loopback WebSocket as fallback (e.g. Linux, S5).
+- Build tiles in one pass in the wire format; use mimalloc.
+- With that, the viewer meets the navigation budgets on both reference systems. The display approach
+  (equirect atlas) is confirmed on Windows.
+
 ## Atlas vs cube map
 
 Both were implemented on the same virtual-texturing core (page table + tile array); the cube variant
@@ -205,8 +277,7 @@ sync. The cube code is removed after the spike.
 
 ## Not covered / open
 
-- **Windows transport** (see the Windows section) – follow-up spike S1b. Peak RSS is not reported on
-  Windows yet (use Task Manager).
+- **Windows decode times** for EXR and 16-bit TIFF (see the S1b addendum) – to be solved in E1.3.
 - **Cold file cache** numbers (see caveat above).
 - **Comparison with Photoshop/Affinity** – maintainer task [#6](https://github.com/777555777/pano-retouch/issues/6).
 - **Colour management**: the viewer shows source values without conversion (ProPhoto/Adobe RGB look
