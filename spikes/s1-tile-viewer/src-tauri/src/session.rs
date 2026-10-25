@@ -153,7 +153,7 @@ impl Session {
             (d.pyramid.clone(), d.cache.clone(), self.info.storage)
         };
         let raw = if let Some(p) = pyr {
-            p.equirect_tile_raw(level, tx, ty).ok_or_else(|| TileError::Bad("bad tile".into()))?
+            return p.equirect_tile_wire(level, tx, ty, wire).ok_or_else(|| TileError::Bad("bad tile".into()));
         } else if let Some(c) = cache {
             c.tile_raw(level, tx, ty).map_err(TileError::Bad)?
         } else {
@@ -244,8 +244,12 @@ pub fn peak_rss_mb() -> f64 {
         let v = u.ru_maxrss as f64;
         if cfg!(target_os = "macos") { v / 1e6 } else { v * 1024.0 / 1e6 }
     }
-    #[cfg(not(unix))]
-    {
-        0.0
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 { c.PeakWorkingSetSize as f64 / 1e6 } else { 0.0 }
     }
 }

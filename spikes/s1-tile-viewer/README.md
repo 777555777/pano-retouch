@@ -20,6 +20,21 @@ the product; the real implementation starts with E1.3/E1.4.
 | Scheduler | `src/tiles.ts` | Visible-tile set (same LOD rule as the shader), priority queue, prefetch, stale-request dropping, slot LRU |
 | Benchmarks | `src/main.ts`, `src-tauri/src/bin/s1-bench.rs` | In-app benchmarks (open, camera path, transport) and a headless Rust benchmark |
 
+## Spike S1b – Windows transport ([issue #14](https://github.com/777555777/pano-retouch/issues/14))
+
+On Windows, WebView2 delivered only ~150 MB/s through the custom URI scheme and `ipc::Response`. S1b adds:
+
+| Transport | How | Where |
+| --- | --- | --- |
+| `protocol` | custom URI scheme `tile://` (S1) | all |
+| `ipc` | `ipc::Response` (S1) | all |
+| `ws` | loopback WebSocket on 127.0.0.1, random port, session token | all |
+| `shared` | WebView2 shared buffers: a ring of 48 tile slots + one 32 MB slot is posted to the page once; Rust writes tiles straight into that memory, only a tiny message goes through IPC | Windows only |
+
+Also new: tiles are built in one pass directly in the wire format, mimalloc as allocator, the
+transport benchmark includes a "null" payload (pure transport, no tile work) and batches of 8 tiles,
+and peak memory is reported on Windows.
+
 ## Running
 
 Requirements: Rust (stable), Node 20+, pnpm. Test images are read from `PANO_TESTDATA`
@@ -45,10 +60,11 @@ S1_AUTO="Panorama edited.jpg,Panorama 16bit.tif,Panorama_hdr.exr" pnpm tauri dev
 | Variable | Meaning |
 | --- | --- |
 | `S1_AUTO` | comma-separated parts of file names under `PANO_TESTDATA` |
-| `S1_AUTO_LAYOUTS` | `equirect,cube` (default) |
+| `S1_AUTO_LAYOUTS` | `equirect` (default), or `equirect,cube` |
+| `S1_AUTO_TRANSPORTS` | `protocol,ws,shared` (default; unavailable ones are skipped) |
 | `S1_SCALE` | render scale instead of the display's pixel ratio (e.g. `3` ≈ 5K canvas) |
 | `S1_TUNE` | UI overrides, e.g. `inflight=24,uploads=16,slots=512` |
-| `S1_SNAP_DIR` | where canvas snapshots are written (**they show your images – keep them local**) |
+| `S1_SNAP_DIR` | write canvas snapshots there (only when set; **they show your images – keep them local**) |
 
 The last log line `[ui] AUTO RESULT {…}` contains all numbers as JSON.
 

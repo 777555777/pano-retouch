@@ -136,7 +136,7 @@ export class Renderer {
     this.rebind();
   }
 
-  setBase(data: ArrayBuffer | null, w: number, h: number, mips: number, wire: Wire): void {
+  setBase(data: Uint8Array | null, w: number, h: number, mips: number, wire: Wire): void {
     this.base?.destroy();
     const bpp = wire === "u8" ? 4 : 8;
     this.base = this.device.createTexture({
@@ -173,7 +173,7 @@ export class Renderer {
     });
   }
 
-  writeTile(slot: number, data: ArrayBuffer): void {
+  writeTile(slot: number, data: Uint8Array): void {
     const bpp = this.wire === "u8" ? 4 : 8;
     this.device.queue.writeTexture({ texture: this.atlas!, origin: [0, 0, slot] }, data,
       { bytesPerRow: this.slot * bpp, rowsPerImage: this.slot }, [this.slot, this.slot, 1]);

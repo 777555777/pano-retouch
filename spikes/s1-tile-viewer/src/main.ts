@@ -3,7 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Renderer, Wire } from "./renderer";
-import { fetchBytes, Layout, OpenInfo, pct, TileManager, TileOptions, Transport } from "./tiles";
+import { Layout, OpenInfo, pct, TileManager, TileOptions } from "./tiles";
+import { available, fetchBatch, fetchBytes, initTransports, Transport } from "./transport";
 import { View } from "./sphere";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -389,37 +390,46 @@ async function benchPath(): Promise<PhaseResult[]> {
 async function benchTransport(): Promise<unknown[]> {
   if (!info || !tm?.tilesReady) throw new Error("open an image and wait for tiles");
   const l0 = info.levels[0];
-  const paths = (wire: string) => {
-    const p: string[] = [];
-    for (let i = 0; i < 120; i++) {
-      const tx = (i * 7) % l0.tiles_x, ty = Math.floor(l0.tiles_y / 2) - 2 + (i % 4);
-      p.push(`${info!.session}/e/0/${tx}/${ty}/${wire}`);
-    }
-    return p;
-  };
+  const session = info.session;
+  const N = 64;
+  const tiles = (): [number, number, number][] =>
+    Array.from({ length: N }, (_, i) => [0, (i * 7) % l0.tiles_x, Math.floor(l0.tiles_y / 2) - 2 + (i % 4)]);
+  // each case: requests to make, how to make one, tiles per request
+  const cases: { name: string; conc: number; n: number; per: number; run: (i: number, t: Transport) => Promise<number> }[] = [
+    { name: "null 1 MB", conc: 1, n: N, per: 1, run: async (_i, t) => (await fetchBytes("null/1056784", t)).buf.byteLength },
+    { name: "null 1 MB", conc: 8, n: N, per: 1, run: async (_i, t) => (await fetchBytes("null/1056784", t)).buf.byteLength },
+    ...(["u8", "f16"] as const).flatMap((wire) => [1, 8].map((conc) => ({
+      name: `tile ${wire}`, conc, n: N, per: 1,
+      run: async (i: number, t: Transport) => {
+        const [l, x, y] = tiles()[i];
+        return (await fetchBytes(`${session}/e/${l}/${x}/${y}/${wire}`, t)).buf.byteLength;
+      },
+    }))),
+    { name: "batch 8 × tile u8", conc: 2, n: N / 8, per: 8, run: async (i, t) => {
+      const parts = await fetchBatch(session, "u8", tiles().slice(i * 8, i * 8 + 8), t);
+      return parts.reduce((a, p) => a + p.byteLength, 0);
+    } },
+  ];
   const rows = [];
-  for (const transport of ["protocol", "ipc"] as Transport[]) {
-    for (const wire of ["u8", "f16"]) {
-      for (const conc of [1, 8]) {
-        const ps = paths(wire);
-        let bytes = 0, i = 0;
-        const lat: number[] = [];
-        const t = performance.now();
-        await Promise.all(Array.from({ length: conc }, async () => {
-          while (i < ps.length) {
-            const p = ps[i++];
-            const s = performance.now();
-            const { buf } = await fetchBytes(p, transport);
-            lat.push(performance.now() - s);
-            bytes += buf.byteLength;
-          }
-        }));
-        const el = (performance.now() - t) / 1000;
-        const row = { transport, wire, concurrency: conc, tiles: ps.length, MBps: Math.round(bytes / 1e6 / el),
-          tilesPerSec: Math.round(ps.length / el), latP50: +pct(lat, 50).toFixed(1), latP95: +pct(lat, 95).toFixed(1) };
-        rows.push(row);
-        log(`  ${JSON.stringify(row)}`);
-      }
+  for (const transport of available) {
+    for (const c of cases) {
+      let bytes = 0, next = 0;
+      const lat: number[] = [];
+      const t = performance.now();
+      await Promise.all(Array.from({ length: c.conc }, async () => {
+        while (next < c.n) {
+          const i = next++;
+          const s = performance.now();
+          const n = await c.run(i, transport); // not `bytes += await …` – that loses updates when parallel
+          bytes += n;
+          lat.push(performance.now() - s);
+        }
+      }));
+      const el = (performance.now() - t) / 1000;
+      const row = { transport, payload: c.name, concurrency: c.conc, MBps: Math.round(bytes / 1e6 / el),
+        tilesPerSec: Math.round((c.n * c.per) / el), latP50: +pct(lat, 50).toFixed(1), latP95: +pct(lat, 95).toFixed(1) };
+      rows.push(row);
+      log(`  ${JSON.stringify(row)}`);
     }
   }
   console.table(rows);
@@ -446,6 +456,14 @@ async function benchOpen(path: string): Promise<unknown[]> {
   return rows;
 }
 
+async function benchOpenCached(path: string): Promise<unknown> {
+  await openImage(path, true);
+  const ok = await until(() => !isNaN(sharpMs), 30000);
+  const row = { run: "cache", transport: tm?.o.transport, firstView: Math.round(firstViewMs), sharp: ok ? Math.round(sharpMs) : "timeout" };
+  log(`  open ${JSON.stringify(row)}`);
+  return row;
+}
+
 // ---------------------------------------------------------------- UI
 
 async function main(): Promise<void> {
@@ -457,6 +475,11 @@ async function main(): Promise<void> {
     hud.textContent = String(e);
     return;
   }
+  const { available: tr, notes } = await initTransports();
+  log(`transports: ${tr.join(", ")}${notes.length ? ` (${notes.join("; ")})` : ""}`);
+  const tsel = $<HTMLSelectElement>("transport");
+  const labels: Record<Transport, string> = { protocol: "custom URI scheme", ipc: "ipc::Response", ws: "loopback WebSocket", shared: "WebView2 shared buffers" };
+  tsel.innerHTML = tr.map((t) => `<option value="${t}">${labels[t]}</option>`).join("");
   const files = await invoke<{ path: string; name: string; size_mb: number }[]>("list_testdata");
   const sel = $<HTMLSelectElement>("file");
   for (const f of files) {
@@ -492,9 +515,9 @@ async function main(): Promise<void> {
   }
   requestAnimationFrame(frame);
 
-  const auto = await invoke<{ files: string[]; layouts: Layout[]; scale: number; tune: [string, string][] } | null>("auto_config");
+  const auto = await invoke<{ files: string[]; layouts: Layout[]; scale: number; transports: Transport[]; snaps: boolean; tune: [string, string][] } | null>("auto_config");
   if (auto) {
-    autoMode = true;
+    autoMode = auto.snaps;
     renderer.scale = auto.scale;
     for (const [k, v] of auto.tune) {
       const el = $<HTMLInputElement>(k);
@@ -508,7 +531,9 @@ async function main(): Promise<void> {
       canvas: `${canvas.width}×${canvas.height}`,
       dpr: window.devicePixelRatio,
       userAgent: navigator.userAgent,
+      transports: available,
     };
+    const transports = auto.transports.filter((t) => available.includes(t));
     for (const [i, f] of auto.files.entries()) {
       const name = f.split(/[\\/]/).pop()!;
       sel.value = f;
@@ -516,19 +541,25 @@ async function main(): Promise<void> {
       const r: Record<string, unknown> = {};
       try {
         $<HTMLSelectElement>("layout").value = "equirect";
+        $<HTMLSelectElement>("transport").value = transports[0];
         r.open = await benchOpen(f);
-        for (const layout of auto.layouts) {
-          $<HTMLSelectElement>("layout").value = layout;
-          rebuildTiles();
-          r[`path-${layout}`] = await benchPath();
-          $<HTMLInputElement>("debug").checked = true;
-          view = { yaw: 0, pitch: -Math.PI / 2, fov: 90 * DEG };
-          await until(() => !!tm && tm.stats.missing === 0 && tm.stats.inflight === 0, 5000);
-          await snap(`${tag()}-nadir-levels`);
-          $<HTMLInputElement>("debug").checked = false;
+        for (const transport of transports) {
+          $<HTMLSelectElement>("transport").value = transport;
+          r[`open-${transport}`] = await benchOpenCached(f);
+          for (const layout of auto.layouts) {
+            $<HTMLSelectElement>("layout").value = layout;
+            rebuildTiles();
+            r[`path-${layout}-${transport}`] = await benchPath();
+            $<HTMLInputElement>("debug").checked = true;
+            view = { yaw: 0, pitch: -Math.PI / 2, fov: 90 * DEG };
+            await until(() => !!tm && tm.stats.missing === 0 && tm.stats.inflight === 0, 5000);
+            await snap(`${tag()}-${transport}-nadir-levels`);
+            $<HTMLInputElement>("debug").checked = false;
+          }
         }
         if (i === 0) {
           $<HTMLSelectElement>("layout").value = "equirect";
+          $<HTMLSelectElement>("transport").value = transports[0];
           rebuildTiles();
           r.transport = await benchTransport();
         }

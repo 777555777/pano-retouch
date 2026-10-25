@@ -39,8 +39,14 @@ pub fn probe(path: &Path) -> Result<Probe> {
     let kind = kind_of(path).ok_or("unsupported file type")?;
     match kind {
         Kind::Jpeg => {
-            let d = mozjpeg::Decompress::new_path(path).map_err(|e| e.to_string())?;
-            Ok(Probe { kind, width: d.width() as u32, height: d.height() as u32, storage: Storage::U8 })
+            #[cfg(feature = "native")]
+            let (w, h) = {
+                let d = mozjpeg::Decompress::new_path(path).map_err(|e| e.to_string())?;
+                (d.width() as u32, d.height() as u32)
+            };
+            #[cfg(not(feature = "native"))]
+            let (w, h) = { let l = jpeg_zune(path)?; (l.width, l.height) };
+            Ok(Probe { kind, width: w, height: h, storage: Storage::U8 })
         }
         Kind::Tiff => {
             let mut d = tiff_decoder(path)?;
@@ -68,7 +74,10 @@ pub enum JpegDecoder {
 
 pub fn decode_full(path: &Path, kind: Kind, jpeg: JpegDecoder) -> Result<Level> {
     match (kind, jpeg) {
+        #[cfg(feature = "native")]
         (Kind::Jpeg, JpegDecoder::Turbo) => jpeg_turbo(path, 8),
+        #[cfg(not(feature = "native"))]
+        (Kind::Jpeg, JpegDecoder::Turbo) => jpeg_zune(path),
         (Kind::Jpeg, JpegDecoder::Zune) => jpeg_zune(path),
         (Kind::Tiff, _) => tiff_parallel(path),
         (Kind::Exr, _) => exr_rgba(path),
@@ -77,9 +86,13 @@ pub fn decode_full(path: &Path, kind: Kind, jpeg: JpegDecoder) -> Result<Level> 
 
 /// Fast preview: libjpeg-turbo DCT scaling (`scale_num/8`), only entropy decoding is full cost.
 pub fn jpeg_quick(path: &Path) -> Result<Level> {
-    jpeg_turbo(path, 1)
+    #[cfg(feature = "native")]
+    return jpeg_turbo(path, 1);
+    #[cfg(not(feature = "native"))]
+    return jpeg_zune(path);
 }
 
+#[cfg(feature = "native")]
 fn jpeg_turbo(path: &Path, scale_num: u8) -> Result<Level> {
     let mut d = mozjpeg::Decompress::new_path(path).map_err(|e| e.to_string())?;
     d.scale(scale_num);

@@ -62,17 +62,25 @@ fn bench(path: &std::path::Path, zune: bool, no_cache: bool) -> Result<(), Strin
     let l0i = &infos[0];
     let n = (l0i.tiles_x * l0i.tiles_y) as usize;
     for wire in [pyramid::Wire::U8, pyramid::Wire::F16] {
+        // S1: extract raw tile, then convert (several allocations and copies per tile)
+        let t = Instant::now();
+        for ty in 0..l0i.tiles_y {
+            for tx in 0..l0i.tiles_x {
+                let raw = pyr.equirect_tile_raw(0, tx, ty).unwrap();
+                std::hint::black_box(pyramid::to_wire(p.storage, raw, wire));
+            }
+        }
+        let old = ms(t) / n as f64;
+        // S1b: one pass straight into the wire format
         let t = Instant::now();
         let mut bytes = 0usize;
         for ty in 0..l0i.tiles_y {
             for tx in 0..l0i.tiles_x {
-                let raw = pyr.equirect_tile_raw(0, tx, ty).unwrap();
-                bytes += pyramid::to_wire(p.storage, raw, wire).len();
+                bytes += std::hint::black_box(pyr.equirect_tile_wire(0, tx, ty, wire).unwrap()).len();
             }
         }
-        let el = ms(t);
-        println!("tile L0 {:?}      {:>8.3} ms/tile ({n} tiles, {:.2} MB/tile, single thread)", wire, el / n as f64,
-            bytes as f64 / n as f64 / 1e6);
+        println!("tile L0 {:?}      {:>8.3} ms/tile single pass, {:.3} ms raw+convert ({n} tiles, {:.2} MB/tile, 1 thread)",
+            wire, ms(t) / n as f64, old, bytes as f64 / n as f64 / 1e6);
     }
     let cl = pyramid::cube_level_infos(&infos);
     let t = Instant::now();

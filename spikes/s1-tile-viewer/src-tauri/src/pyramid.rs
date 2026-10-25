@@ -53,6 +53,24 @@ impl Wire {
 pub trait Sample: Copy + Default + Send + Sync + bytemuck::Pod + 'static {
     fn to_f(self) -> f32;
     fn from_f(v: f32) -> Self;
+    /// Converts a run of samples into wire bytes (`dst.len() == src.len() * wire bytes per sample`).
+    fn write_wire(src: &[Self], dst: &mut [u8], wire: Wire);
+}
+
+impl Wire {
+    pub fn bytes_per_sample(self) -> usize {
+        match self {
+            Wire::U8 => 1,
+            Wire::F16 => 2,
+        }
+    }
+}
+
+#[inline]
+fn write_f16(dst: &mut [u8], vals: impl Iterator<Item = f16>) {
+    for (d, v) in dst.chunks_exact_mut(2).zip(vals) {
+        d.copy_from_slice(&v.to_le_bytes());
+    }
 }
 
 impl Sample for u8 {
@@ -63,6 +81,15 @@ impl Sample for u8 {
     #[inline(always)]
     fn from_f(v: f32) -> Self {
         (v + 0.5).clamp(0.0, 255.0) as u8
+    }
+    fn write_wire(src: &[Self], dst: &mut [u8], wire: Wire) {
+        match wire {
+            Wire::U8 => dst.copy_from_slice(src),
+            Wire::F16 => {
+                let lut = u8_to_f16_lut();
+                write_f16(dst, src.iter().map(|&v| lut[v as usize]));
+            }
+        }
     }
 }
 
@@ -75,6 +102,19 @@ impl Sample for u16 {
     fn from_f(v: f32) -> Self {
         (v + 0.5).clamp(0.0, 65535.0) as u16
     }
+    fn write_wire(src: &[Self], dst: &mut [u8], wire: Wire) {
+        match wire {
+            Wire::U8 => {
+                for (d, &v) in dst.iter_mut().zip(src) {
+                    *d = ((v as u32 * 255 + 32767) / 65535) as u8;
+                }
+            }
+            Wire::F16 => {
+                let lut = u16_to_f16_lut();
+                write_f16(dst, src.iter().map(|&v| lut[v as usize]));
+            }
+        }
+    }
 }
 
 impl Sample for f16 {
@@ -85,6 +125,16 @@ impl Sample for f16 {
     #[inline(always)]
     fn from_f(v: f32) -> Self {
         f16::from_f32(v)
+    }
+    fn write_wire(src: &[Self], dst: &mut [u8], wire: Wire) {
+        match wire {
+            Wire::U8 => {
+                for (d, v) in dst.iter_mut().zip(src) {
+                    *d = (v.to_f32().clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                }
+            }
+            Wire::F16 => dst.copy_from_slice(bytemuck::cast_slice(src)),
+        }
     }
 }
 
@@ -314,6 +364,40 @@ impl Pyramid {
         Some(with_pixels!(&l.px, v => go(v, w as usize, h, y0, &xs)))
     }
 
+    /// Equirect tile incl. gutter, written in one pass directly in the wire format (one allocation,
+    /// no intermediate copies).
+    pub fn equirect_tile_wire(&self, level: usize, tx: u32, ty: u32, wire: Wire) -> Option<Vec<u8>> {
+        let l = self.levels.get(level)?;
+        let (w, h) = (l.width as i64, l.height as i64);
+        let x0 = tx as i64 * TILE as i64 - GUTTER as i64;
+        let y0 = ty as i64 * TILE as i64 - GUTTER as i64;
+        // contiguous source runs of one row: (dst start px, src start px, len)
+        let n = SLOT as usize;
+        let mut runs = vec![];
+        let mut i = 0usize;
+        while i < n {
+            let start = (x0 + i as i64).rem_euclid(w) as usize;
+            let len = (n - i).min(w as usize - start);
+            runs.push((i, start, len));
+            i += len;
+        }
+        let bps = wire.bytes_per_sample();
+        let mut out = vec![0u8; n * n * 4 * bps];
+        fn go<T: Sample>(s: &[T], w: usize, h: i64, y0: i64, runs: &[(usize, usize, usize)], out: &mut [u8], wire: Wire) {
+            let n = SLOT as usize;
+            let bps = wire.bytes_per_sample();
+            for (j, drow) in out.chunks_exact_mut(n * 4 * bps).enumerate() {
+                let sy = (y0 + j as i64).clamp(0, h - 1) as usize;
+                let srow = &s[sy * w * 4..][..w * 4];
+                for &(d, src, len) in runs {
+                    T::write_wire(&srow[src * 4..(src + len) * 4], &mut drow[d * 4 * bps..(d + len) * 4 * bps], wire);
+                }
+            }
+        }
+        with_pixels!(&l.px, v => go(v, w as usize, h, y0, &runs, &mut out, wire));
+        Some(out)
+    }
+
     /// Cube-face tile incl. gutter, generated on demand from equirect level `level` (bilinear).
     pub fn cube_tile_raw(&self, face: u32, level: usize, n: u32, tx: u32, ty: u32) -> Option<Vec<u8>> {
         let l = self.levels.get(level)?;
@@ -407,27 +491,27 @@ fn u16_to_f16_lut() -> &'static [f16] {
 
 /// Converts raw storage samples to the wire format requested by the frontend.
 pub fn to_wire(storage: Storage, raw: Vec<u8>, wire: Wire) -> Vec<u8> {
-    match (storage, wire) {
-        (Storage::U8, Wire::U8) | (Storage::F16, Wire::F16) => raw,
-        (Storage::U16, Wire::U8) => {
-            let s: &[u16] = &bytemuck::pod_collect_to_vec::<u8, u16>(&raw);
-            s.iter().map(|&v| ((v as u32 * 255 + 32767) / 65535) as u8).collect()
-        }
-        (Storage::F16, Wire::U8) => {
-            let s: Vec<f16> = bytemuck::pod_collect_to_vec(&raw);
-            s.iter().map(|v| (v.to_f32().clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect()
-        }
-        (Storage::U8, Wire::F16) => {
-            let lut = u8_to_f16_lut();
-            let out: Vec<f16> = raw.iter().map(|&v| lut[v as usize]).collect();
-            bytemuck::cast_slice(&out).to_vec()
-        }
-        (Storage::U16, Wire::F16) => {
-            let lut = u16_to_f16_lut();
-            let s: Vec<u16> = bytemuck::pod_collect_to_vec(&raw);
-            let out: Vec<f16> = s.iter().map(|&v| lut[v as usize]).collect();
-            bytemuck::cast_slice(&out).to_vec()
-        }
+    if matches!((storage, wire), (Storage::U8, Wire::U8) | (Storage::F16, Wire::F16)) {
+        return raw;
+    }
+    fn go<T: Sample>(raw: &[u8], wire: Wire) -> Vec<u8> {
+        // Avoid a copy when the buffer is suitably aligned (it practically always is).
+        let owned;
+        let src: &[T] = match bytemuck::try_cast_slice(raw) {
+            Ok(s) => s,
+            Err(_) => {
+                owned = bytemuck::pod_collect_to_vec::<u8, T>(raw);
+                &owned
+            }
+        };
+        let mut out = vec![0u8; src.len() * wire.bytes_per_sample()];
+        T::write_wire(src, &mut out, wire);
+        out
+    }
+    match storage {
+        Storage::U8 => go::<u8>(&raw, wire),
+        Storage::U16 => go::<u16>(&raw, wire),
+        Storage::F16 => go::<f16>(&raw, wire),
     }
 }
 
@@ -474,6 +558,22 @@ mod tests {
         assert!((u - 0.5).abs() < 1e-6 && (v - 0.5).abs() < 1e-6);
         let (_, v) = dir_to_uv(cube_dir(3, 0.0, 0.0));
         assert!((v - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn single_pass_wire_tile_matches_raw_plus_conversion() {
+        let mut v = vec![0u16; 1000 * 500 * 4];
+        for (i, x) in v.iter_mut().enumerate() {
+            *x = (i * 37 % 65536) as u16;
+        }
+        let p = Pyramid::build(Level { width: 1000, height: 500, px: Pixels::U16(v) });
+        for (tx, ty) in [(0, 0), (1, 0), (1, 1)] {
+            for wire in [Wire::U8, Wire::F16] {
+                let a = p.equirect_tile_wire(0, tx, ty, wire).unwrap();
+                let b = to_wire(Storage::U16, p.equirect_tile_raw(0, tx, ty).unwrap(), wire);
+                assert_eq!(a, b, "tile {tx},{ty} {wire:?}");
+            }
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // Tile scheduling: which tiles the current view needs, priority queue, transport, slot LRU,
 // stale-request dropping and prefetch in the direction of movement.
 
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { fetchBytes, NotReady, Transport } from "./transport";
 import { Renderer, Grid, Wire } from "./renderer";
 import { angleBetween, basis, cubeFace, cubeST, dirToUv, rayDir, View } from "./sphere";
 
@@ -24,7 +24,7 @@ export interface OpenInfo {
 }
 
 export type Layout = "equirect" | "cube";
-export type Transport = "protocol" | "ipc";
+export type { Transport };
 
 export interface TileOptions {
   layout: Layout;
@@ -43,26 +43,6 @@ const KEY_Y = 1 << 10;
 const key = (g: number, tx: number, ty: number) => g * KEY_G + ty * KEY_Y + tx;
 /** [grid, tx, ty] */
 const keyParts = (k: number) => [Math.floor(k / KEY_G), k % 1024, Math.floor(k / KEY_Y) % 1024];
-
-class NotReady extends Error {}
-
-export const tileBaseUrl = convertFileSrc("", "tile");
-
-export async function fetchBytes(path: string, transport: Transport, signal?: AbortSignal): Promise<{ buf: ArrayBuffer; serverMs: number }> {
-  if (transport === "ipc") {
-    try {
-      const buf = await invoke<ArrayBuffer>("tile_ipc", { path });
-      return { buf, serverMs: NaN };
-    } catch (e) {
-      if (String(e).startsWith("503")) throw new NotReady();
-      throw e;
-    }
-  }
-  const r = await fetch(tileBaseUrl + path, { signal });
-  if (r.status === 503) throw new NotReady();
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-  return { buf: await r.arrayBuffer(), serverMs: parseFloat(r.headers.get("x-server-ms") ?? "NaN") };
-}
 
 export interface FrameStats {
   needed: number;
@@ -83,7 +63,7 @@ export class TileManager {
   private resident = new Map<number, number>();
   private inflight = new Map<number, AbortController>();
   private notReady = new Set<number>();
-  private uploads: { k: number; buf: ArrayBuffer }[] = [];
+  private uploads: { k: number; buf: Uint8Array }[] = [];
   private needed = new Map<number, number>(); // key → priority (lower = sooner)
   private prefetchSet = new Set<number>();
   private neededSince = new Map<number, number>();
