@@ -8,9 +8,9 @@ Status values: `Proposed` → `Accepted` | `Rejected` | `Superseded`.
 
 | ADR | Title | Status |
 | --- | --- | --- |
-| [0001](0001-desktop-shell-tauri-rust.md) | Desktop shell: Tauri 2 with Rust core and Svelte UI | Proposed (spikes S1, S5) |
+| [0001](0001-desktop-shell-tauri-rust.md) | Desktop shell: Tauri 2 with Rust core and Svelte UI | Proposed (S1 confirmed on macOS + Windows; S5 open) |
 | [0002](0002-non-destructive-edit-stack.md) | Non-destructive edit stack in spherical coordinates | Accepted |
-| [0003](0003-tiled-image-pipeline.md) | Tiled image pipeline and working format | Proposed (spike S1) |
+| [0003](0003-tiled-image-pipeline.md) | Tiled image pipeline and working format | Accepted |
 | [0004](0004-local-ai-inpainting-onnx.md) | Local AI inpainting via ONNX Runtime | Proposed (spike S3) |
 
 ## Template

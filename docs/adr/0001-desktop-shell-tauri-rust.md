@@ -1,6 +1,6 @@
 # ADR-0001: Desktop shell: Tauri 2 with Rust core and Svelte UI
 
-- Status: Proposed (to be validated by spikes S1, S5)
+- Status: Proposed (to be validated by spikes S1, S5) – S1 confirmed on macOS and Windows, see [spike report](../spikes/s1-tile-viewer.md)
 - Date: 2026-10-10
 
 ## Context
@@ -33,5 +33,8 @@
 - + Web know-how stays useful; Rust provides native performance and safety.
 - + Core crates are independent of Tauri → testable, CLI possible later.
 - − The webview ↔ Rust boundary is a bottleneck for pixel data → tile/LOD design is mandatory.
-- − WebGPU support depends on the system webview (Linux: WebKitGTK uncertain).
+- − WebGPU support depends on the system webview (Linux: WebKitGTK uncertain). Spike S1: WebGPU
+  available in WKWebView (macOS 27) and WebView2 (Windows 11), 60 fps at 283 MP on both; WKWebView caps
+  `requestAnimationFrame` at 60 Hz. On Windows, large binary data must bypass WebView2's resource/IPC path
+  (~150 MB/s) via shared buffers (see ADR-0003).
 - − Rust code is mostly written by agents → high test coverage and clear module boundaries are required.
