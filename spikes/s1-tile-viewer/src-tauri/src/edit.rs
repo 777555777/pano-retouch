@@ -611,7 +611,7 @@ pub fn dirty_tiles(w: u32, h: u32, rects: &[Rect]) -> Vec<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pyramid::Pyramid;
+    use crate::pyramid::{Level, Pyramid};
 
     fn flat(w: u32, h: u32, v: u8) -> Pyramid {
         Pyramid::build(Level {
