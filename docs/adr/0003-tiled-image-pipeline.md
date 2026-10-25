@@ -1,6 +1,6 @@
 # ADR-0003: Tiled image pipeline and working format
 
-- Status: Proposed (working format recommended, display approach open until spike S1)
+- Status: Accepted (2026-10-25, after [spikes S1 and S1b](../spikes/s1-tile-viewer.md) on macOS and Windows)
 - Date: 2026-10-10
 
 ## Context
@@ -10,7 +10,7 @@
 - Memory needs of several GB per image; batch processes many images.
 - The viewer needs low resolutions quickly; export needs full resolution.
 
-## Decision (proposal)
+## Decision
 
 - Images are organised in **tiles** (start value 512×512, optimise in the spike) with a **pyramid**.
 - **LRU tile cache** with a configurable RAM budget; paging to a disk cache.
@@ -22,11 +22,32 @@
 - **Dirty tracking** per operation via its spherical bounding region → only affected tiles are recomputed.
 - Export streams tile/row-wise into the encoder where the format allows it.
 
+## Display (result of spike S1)
+
+- **Virtual texturing directly on the equirect pyramid** – no cube map. The viewer shader picks the
+  level per pixel from its angular footprint, looks the tile up in a **page table** (storage buffer) and
+  samples a **`texture_2d_array` tile cache**; missing tiles fall back to coarser resident levels and a
+  2048×1024 base texture (full mips) that is always resident. New tiles fade in over 150 ms.
+- **Poles:** up to 8 taps along u where the equirect is horizontally compressed – the nadir is then as
+  sharp as with a cube map. The visible-tile set must cover the whole u footprint there.
+- **Tiles:** 512×512 + 1 px gutter (x wraps, y clamps) → 514² slots; levels down to ~3000 px width,
+  coarser views use the base texture.
+- **Wire format:** u8 for SDR sources (incl. 16-bit, display only), f16 for HDR. f16 doubles the bytes
+  but transport is not a bottleneck (5–7 GB/s measured).
+- **Transport:** behind one interface with a per-platform backend – **WebView2 shared buffers on
+  Windows** (1.2–1.9 GB/s measured; the custom URI scheme and `ipc::Response` reach only ~150 MB/s
+  there), **custom URI scheme on macOS** (5–7 GB/s), loopback WebSocket with a session token as fallback
+  (e.g. Linux). Tiles are built in one pass directly in the wire format.
+- Rejected: cube-map LOD – needs a second tile representation (memory or on-demand resampling) that every
+  edit would have to keep in sync; at a 5K canvas it loaded noticeably slower.
+
 ## Open points
 
-- Tile atlas (virtual texturing) vs. cube-map LOD for display.
-- Bandwidth: f16 previews double the data compared to u8 – measure in the spike, maybe u8 for SDR sources.
+- Disk-cache format for 16-bit sources: LZ4 barely compresses u16 (≈ 3 GB per 283 MP image) – evaluate
+  zstd / predictor, or a separate display pyramid (E1.3).
 - Colour management: working space = source profile, conversion only for display.
+- **Windows decode times:** EXR (2.4–2.6 s) and 16-bit TIFF (1.6 s) push the first view over budget on
+  the Windows reference system – faster EXR decoding and a progressive base are E1.3 work.
 
 ## Consequences
 

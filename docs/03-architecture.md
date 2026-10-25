@@ -98,7 +98,8 @@ enable a CLI (B-07) later at no extra cost.
 - Transport as **binary data** (Tauri custom URI scheme or `ipc::Response`), never as JSON/Base64.
   Proposed format: 8-bit RGBA or f16 for previews; previews need not have full bit depth.
 - Rendering: a full-screen shader computes the direction per screen pixel and samples from a tile atlas
-  (virtual texturing) – alternatively cube faces with LOD. Decided in the spike.
+  (virtual texturing on the equirect pyramid, extra taps along u near the poles) – decided in spike S1,
+  see [ADR-0003](adr/0003-tiled-image-pipeline.md) and the [spike report](spikes/s1-tile-viewer.md).
 - **Loading strategy (role model krpano, counter-example Google Maps):**
   - There is always *something* to see: the coarsest pyramid level of the whole image stays in GPU memory.
   - Priority queue: visible tiles at target resolution first, then intermediate levels, then

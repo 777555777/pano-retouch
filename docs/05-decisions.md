@@ -91,3 +91,12 @@ document they were carried into. Architecture decisions live in the [ADRs](adr/)
 | W4 | Layer order | Strict like Photoshop (top covers bottom), also for adjustment layers. | 07-tools-and-layers, UX concept |
 | W5 | Zen mode | Tool options stay visible, exit hint shown – sufficient. | UX concept |
 | – | Mockup feedback | Domain colours, keycaps, scrub fields, fixed-size tool options, edge-collapse with click-only handles, history panel, groups, inline opacity, AI job states. | [08-ux-concept.md](08-ux-concept.md), `mockups/ux-v*/review/` |
+
+## Round 6 – Spike S1/S1b results (2026-10-25)
+
+| # | Topic | Decision | Carried into |
+| --- | --- | --- | --- |
+| X1 | Viewer display approach | Virtual texturing on the equirect pyramid with pole taps; no cube map. | [ADR-0003](adr/0003-tiled-image-pipeline.md) (Accepted) |
+| X2 | Tile transport | One interface, per-platform backend: WebView2 shared buffers on Windows, custom URI scheme on macOS, loopback WebSocket as fallback. | ADR-0003, [spike report](spikes/s1-tile-viewer.md) |
+| X3 | Tile format on the wire | u8 for SDR sources, f16 for HDR; tiles built in one pass in the wire format. | ADR-0003 |
+| X4 | Open performance work | Windows decode times (EXR, 16-bit TIFF), disk-cache size for 16-bit sources → E1.3. | spike report, ADR-0003 open points |
