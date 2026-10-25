@@ -23,6 +23,8 @@ tauri-build = { version = "2", features = [] }
 # (`cargo check --target x86_64-pc-windows-msvc --no-default-features`).
 default = ["native"]
 native = ["dep:mozjpeg", "dep:mimalloc"]
+# S3: AI inpainting via ONNX Runtime (downloads prebuilt ONNX Runtime binaries at build time)
+ai = ["dep:ort", "dep:ndarray"]
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -44,6 +46,7 @@ tokio-tungstenite = "0.30.0"
 futures-util = "0.3.34"
 tokio = { version = "1.54.1", features = ["net", "sync", "rt", "macros"] }
 png = "0.18.1"
+ndarray = { version = "0.17", optional = true }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -59,7 +62,15 @@ strip = false
 opt-level = 3
 debug = "line-tables-only"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.15", optional = true, features = ["coreml"] }
+
 [target."cfg(windows)".dependencies]
+ort = { version = "=2.0.0-rc.15", optional = true, features = ["directml"] }
 webview2-com = "0.39"
 windows = "0.62"
 windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[[bin]]
+name = "s3-inpaint"
+required-features = ["ai", "native"]

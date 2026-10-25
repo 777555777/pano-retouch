@@ -512,7 +512,7 @@ fn sample_clone<T: Sample>(s: &[T], w: usize, h: usize, x: f64, y: f64) -> [f64;
 
 /// Bicubic (Catmull-Rom) sampling, x wraps, y clamps. Slightly sharper than bilinear, which offsets
 /// the second (bilinear) filtering when the result is displayed.
-fn catmull_rom<T: Sample>(s: &[T], w: usize, h: usize, x: f64, y: f64) -> [f64; 4] {
+pub(crate) fn catmull_rom<T: Sample>(s: &[T], w: usize, h: usize, x: f64, y: f64) -> [f64; 4] {
     let (fx, fy) = (x - 0.5, y - 0.5);
     let (x0, y0) = (fx.floor(), fy.floor());
     let (tx, ty) = (fx - x0, fy - y0);

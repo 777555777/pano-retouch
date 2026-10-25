@@ -5,6 +5,9 @@
 pub mod cache;
 pub mod decode;
 pub mod edit;
+pub mod inpaint;
+#[cfg(feature = "ai")]
+pub mod ai;
 pub mod pyramid;
 pub mod session;
 pub mod synthetic;

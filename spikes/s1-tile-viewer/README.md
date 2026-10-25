@@ -46,6 +46,22 @@ Automatic run: `S1_AUTO_MODE=brush S1_AUTO="synthetic:24000,Panorama edited.jpg"
 (`S2_ONLY=<part of a scenario name>` runs a single stroke). Headless: `s1-bench --strokes <file>`,
 `s1-bench --golden <dir>`.
 
+## Spike S3 – AI inpainting ([issue #3](https://github.com/777555777/pano-retouch/issues/3))
+
+Command-line tool `s3-inpaint` (feature `ai`, downloads ONNX Runtime binaries at build time): renders a
+gnomonic view around a cap (default: the nadir), masks cap ∪ PTGui alpha hole, fills it with LaMa,
+MI-GAN, PatchMatch, optionally with a full-resolution texture pass (`+tex`), and reprojects into the
+panorama (bit-exact outside the blend region).
+
+```bash
+cd src-tauri
+cargo run --release --features ai --bin s3-inpaint -- "<image>" --cap 23 --alpha --methods lama,lama+tex,migan,pm+tex --provider cpu
+```
+
+Models go to `testdata-local/_models/` (`lama_fp32.onnx` from huggingface.co/Carve/LaMa-ONNX,
+`migan_pipeline_v2.onnx` from huggingface.co/andraniksargsyan/migan); results to
+`testdata-local/_s3/<image>/` – **they show your images, keep them local**.
+
 ## Running
 
 Requirements: Rust (stable), Node 20+, pnpm. Test images are read from `PANO_TESTDATA`
