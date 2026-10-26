@@ -71,8 +71,12 @@ with throw-away code. Outcome of each spike: a short report + ADR update.
 ## M4 – AI inpainting
 
 - **E4.1 Inference infrastructure:** `ort`, GPU providers, model management (download after consent, checksum), classic fallback.
-- **E4.2 Reprojection & inpainting operation.**
-- **E4.3 UX:** job states (progress, cancel, error/retry), discard/regenerate result.
+- **E4.2 Reprojection & inpainting operation:** LaMa + texture pass and PatchMatch + texture pass
+  (spike S3); less repetitive texture pass; invisible boundary (gradient-domain blending, irregular mask
+  edge); result as its own layer.
+- **E4.3 UX:** job states (progress, cancel, error/retry), discard/regenerate result, switch fill method per region.
+- **E4.4 Custom models:** model manifest, import of own ONNX inpainting models with a self-test
+  (ADR-0004); diffusion models later.
 
 ## M5 – Batch retouching & review
 

@@ -61,3 +61,24 @@
   of the surroundings, no colour cast.
 - **Licences:** LaMa Apache-2.0, MI-GAN MIT; both trained on Places2/Places365 (non-commercial image
   terms, effect on weights unsettled) → models stay an optional download with a notice in the dialog.
+
+## Custom models (decided 2026-10-26)
+
+Users can add their own inpainting models; "load an ONNX file and hope" does not work because models
+differ in their contract (input names, NCHW/NHWC, dtype, value range 0..1 / −1..1 / 0..255, RGB/BGR,
+mask polarity, fixed vs. dynamic resolution, whether pre/post-processing is inside the graph). Therefore:
+
+- every model has a small **manifest** (JSON) describing exactly that contract, plus licence, size,
+  checksum and source; manifests for known models (LaMa, MI-GAN) ship with the app;
+- **import:** names, shapes and dtypes are pre-filled from the ONNX file; the user (or a preset) fills in
+  the rest;
+- **self-test on import:** a test image with a test mask detects wrong mask polarity or value range before
+  the model touches a panorama;
+- the pipeline around the model (gnomonic view, mask, HDR tone mapping, texture pass, reprojection,
+  blending) is the same for every model – only the adapter changes;
+- **diffusion models** (SD/Flux inpainting: several networks, iterative sampling, prompts, GB-sized) are
+  not covered by this mechanism – a separate, later integration (or a backend such as ComfyUI).
+
+Reference: [IOPaint](https://github.com/Sanster/IOPaint) (Apache-2.0) wraps many inpainting models behind one
+interface with a small adapter per model.
+

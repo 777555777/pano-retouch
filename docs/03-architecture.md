@@ -305,3 +305,15 @@ pano-retouch/
   Cargo.toml                # Rust workspace
   package.json              # pnpm workspace
 ```
+
+## 9. Reference projects
+
+Projects worth looking at for specific questions (read, learn, compare – code from MIT/Apache projects may
+be reused in AGPL-3.0 with attribution):
+
+| Project | Licence | Why |
+| --- | --- | --- |
+| [PhotoCraft](https://github.com/storytold/photocraft) | MIT / Apache-2.0 | Photoshop-like editor in pure Rust (engine crates, wgpu compositor, egui UI, plug-ins); early alpha but developing very fast – reference for layer/compositing engine, tools, selection and plug-in design. Check its current state when an epic touches these areas. |
+| [IOPaint](https://github.com/Sanster/IOPaint) | Apache-2.0 | Many inpainting models (LaMa, MI-GAN, MAT, diffusion) behind one interface – reference for model adapters (E4.4). |
+| krpano / LizardQ | proprietary | Viewer behaviour for gigapixel tiles (benchmark, see vision). |
+
