@@ -110,3 +110,12 @@ document they were carried into. Architecture decisions live in the [ADRs](adr/)
 | Y3 | Clone sampling | Bicubic (Catmull-Rom). | architecture §4.4 |
 | Y4 | Stroke rasteriser speed | Real strokes are 5–60 MP → plan a rasteriser with ≥ 100 MP/s in the brush epic; commits stay asynchronous. | spike report |
 
+## Round 8 – Spike S3 results (2026-10-26)
+
+| # | Topic | Decision | Carried into |
+| --- | --- | --- | --- |
+| Z1 | Nadir fill | No method wins everywhere: LaMa + texture pass as default when the optional model is installed (best on asphalt), PatchMatch + texture pass without a model (best on snow); switchable per region. | [spike report](spikes/s3-inpaint.md), ADR-0004 |
+| Z2 | AI model | LaMa as optional download (208 MB); MI-GAN not offered for now. | ADR-0004 |
+| Z3 | Execution provider | CPU on macOS and Windows (CoreML slower, DirectML fails on LaMa). | ADR-0004 |
+| Z4 | Required before shipping | Less repetitive texture pass; invisible boundary (gradient-domain blending, irregular mask edge instead of a perfect circle). | spike report, ADR-0004 |
+

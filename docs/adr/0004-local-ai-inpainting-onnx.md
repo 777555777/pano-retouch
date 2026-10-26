@@ -1,6 +1,6 @@
 # ADR-0004: Local AI inpainting via ONNX Runtime
 
-- Status: Proposed (model choice open, spike S3)
+- Status: Proposed – recommendation from [spike S3](../spikes/s3-inpaint.md) (macOS + Windows, maintainer-reviewed); ready to be accepted
 - Date: 2026-10-10
 
 ## Context
@@ -44,3 +44,41 @@
 - + Good quality, offline, exchangeable models.
 - − ONNX Runtime increases the app size (native library per platform).
 - − 16-bit/HDR requires tone mapping before and detail/colour restoration after inference.
+
+## Spike S3 (2026-10-26)
+
+- **No method wins on every scene** (maintainer review): LaMa + full-resolution texture pass is best on
+  asphalt and good on snow, PatchMatch + texture pass best on uniform snow. → **Offer both:** LaMa +
+  texture as the default when the optional model is installed, PatchMatch + texture without a model; the
+  user can switch per region. Plain LaMa (512 px model) and plain PatchMatch are too soft at 300 MP.
+- **Before shipping:** a less repetitive texture pass and an invisible boundary (gradient-domain blending,
+  irregular mask edge) – the perfect circle of the cap stood out in three of four scenes.
+- **MI-GAN not offered for now** (smears or hallucinates), re-evaluate on other scenes later.
+- **Execution:** `ort` 2.0 / ONNX Runtime 1.31 on the **CPU**: CoreML is slower and needs 9 GB (note: `ort`
+  registers CoreML by default unless the CPU policy is set); DirectML fails at run time on LaMa's FFT
+  block. Per region LaMa + texture ~1.5–5 s (M4 Max) / ~7.4 s (i7-12700K), + model load 3 s / 7–8 s once.
+- **HDR:** exposure from the context median, Reinhard + gamma, exact inverse – fill within a few percent
+  of the surroundings, no colour cast.
+- **Licences:** LaMa Apache-2.0, MI-GAN MIT; both trained on Places2/Places365 (non-commercial image
+  terms, effect on weights unsettled) → models stay an optional download with a notice in the dialog.
+
+## Custom models (decided 2026-10-26)
+
+Users can add their own inpainting models; "load an ONNX file and hope" does not work because models
+differ in their contract (input names, NCHW/NHWC, dtype, value range 0..1 / −1..1 / 0..255, RGB/BGR,
+mask polarity, fixed vs. dynamic resolution, whether pre/post-processing is inside the graph). Therefore:
+
+- every model has a small **manifest** (JSON) describing exactly that contract, plus licence, size,
+  checksum and source; manifests for known models (LaMa, MI-GAN) ship with the app;
+- **import:** names, shapes and dtypes are pre-filled from the ONNX file; the user (or a preset) fills in
+  the rest;
+- **self-test on import:** a test image with a test mask detects wrong mask polarity or value range before
+  the model touches a panorama;
+- the pipeline around the model (gnomonic view, mask, HDR tone mapping, texture pass, reprojection,
+  blending) is the same for every model – only the adapter changes;
+- **diffusion models** (SD/Flux inpainting: several networks, iterative sampling, prompts, GB-sized) are
+  not covered by this mechanism – a separate, later integration (or a backend such as ComfyUI).
+
+Reference: [IOPaint](https://github.com/Sanster/IOPaint) (Apache-2.0) wraps many inpainting models behind one
+interface with a small adapter per model.
+

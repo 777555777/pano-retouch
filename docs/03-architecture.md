@@ -145,8 +145,10 @@ Inpainting models work on flat, undistorted images. Hence, invisible to the user
    original stays bit-exact outside the mask.
 5. Store the result as a raster artefact of the operation (non-deterministic, see functional spec).
 
-Open points: resolution limits of models (large masks → tiling or upscaling), 16-bit/HDR inputs (models
-work in 8-bit sRGB → tone mapping/detail transfer needed).
+Spike S3: models work at 512 px, so a **full-resolution texture pass** follows (PatchMatch matching low
+frequencies, copying original pixels from the surroundings); HDR is tone-mapped (exposure from the
+context, Reinhard + gamma) and mapped back exactly. LaMa + texture pass as default when the optional
+model is installed, PatchMatch + texture pass without a model. See [spike S3](spikes/s3-inpaint.md).
 
 ### 4.7 Project & sidecar format (`pano-project`)
 
@@ -307,3 +309,15 @@ pano-retouch/
   Cargo.toml                # Rust workspace
   package.json              # pnpm workspace
 ```
+
+## 9. Reference projects
+
+Projects worth looking at for specific questions (read, learn, compare – code from MIT/Apache projects may
+be reused in AGPL-3.0 with attribution):
+
+| Project | Licence | Why |
+| --- | --- | --- |
+| [PhotoCraft](https://github.com/storytold/photocraft) | MIT / Apache-2.0 | Photoshop-like editor in pure Rust (engine crates, wgpu compositor, egui UI, plug-ins); early alpha but developing very fast – reference for layer/compositing engine, tools, selection and plug-in design. Check its current state when an epic touches these areas. |
+| [IOPaint](https://github.com/Sanster/IOPaint) | Apache-2.0 | Many inpainting models (LaMa, MI-GAN, MAT, diffusion) behind one interface – reference for model adapters (E4.4). |
+| krpano / LizardQ | proprietary | Viewer behaviour for gigapixel tiles (benchmark, see vision). |
+
