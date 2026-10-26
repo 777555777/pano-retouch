@@ -34,3 +34,10 @@
 - + No special cases for seam/poles in the data model.
 - − Rendering must evaluate the stack efficiently (tile caches for intermediate results).
 - − Schema migrations must be considered from the start.
+
+## Spike S2 (2026-10-25)
+
+Confirmed: strokes as directions + angular radius, rasterised per pixel by angular distance, work at the
+seam and the poles and at 300 MP (typical stroke committed in 40–60 ms). The hand-over from the GPU
+preview to the committed tiles uses **edit versions** per stroke and per tile slot. See
+[spike report](../spikes/s2-brush.md).

@@ -101,6 +101,15 @@ document they were carried into. Architecture decisions live in the [ADRs](adr/)
 | X3 | Tile format on the wire | u8 for SDR sources, f16 for HDR; tiles built in one pass in the wire format. | ADR-0003 |
 | X4 | Open performance work | Windows decode times (EXR, 16-bit TIFF), disk-cache size for 16-bit sources → E1.3. | spike report, ADR-0003 open points |
 
+## Round 7 – Spike S2 results (2026-10-25)
+
+| # | Topic | Decision | Carried into |
+| --- | --- | --- | --- |
+| Y1 | Brush preview → commit | Same angular-distance formula in shader and core; edit versions per stroke and per tile slot for a flicker-free hand-over. | [spike report](spikes/s2-brush.md), architecture §4.4, ADR-0002 |
+| Y2 | Pyramid for odd sizes | Area-weighted reduction so all levels stay aligned with level 0. | ADR-0003, architecture §4.2 |
+| Y3 | Clone sampling | Bicubic (Catmull-Rom). | architecture §4.4 |
+| Y4 | Stroke rasteriser speed | Real strokes are 5–60 MP → plan a rasteriser with ≥ 100 MP/s in the brush epic; commits stay asynchronous. | spike report |
+
 ## Round 8 – Spike S3 results (2026-10-26)
 
 | # | Topic | Decision | Carried into |

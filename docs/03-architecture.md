@@ -80,7 +80,7 @@ enable a CLI (B-07) later at no extra cost.
 ### 4.2 Image pipeline & tiling (`pano-image`)
 
 - On open, the image is split into **tiles** (e.g. 512×512) and a **pyramid** (factor-2 reductions) is
-  built. Tiles live in a RAM cache (LRU, configurable budget) and are paged out to disk when needed.
+  built. Odd sizes are reduced area-weighted so every level stays aligned with level 0 (spike S2). Tiles live in a RAM cache (LRU, configurable budget) and are paged out to disk when needed.
 - Working format: stored in source bit depth (u8/u16/f16/f32); computation per tile in `f32`; preview to
   the frontend in `f16` (HDR-capable) or u8 for thumbnails
   ([ADR-0003](adr/0003-tiled-image-pipeline.md)).
@@ -121,6 +121,10 @@ enable a CLI (B-07) later at no extra cost.
   and the seam needs no special case.
 - **Clone stamp:** source = rotation `R`, target pixel direction `d` → source `R·d`. Works anywhere on the
   sphere without distortion.
+- **Hand-over preview → result** (confirmed in [spike S2](spikes/s2-brush.md)): preview and commit use the
+  same distance formula; every committed stroke gets an edit version, every GPU tile slot knows the
+  version it holds, and the shader previews a stroke only where the shown data is older. Changed visible
+  tiles are replaced in place – no flicker. Clone sources are sampled bicubic (Catmull-Rom).
 
 ### 4.5 Nadir/zenith patch
 
