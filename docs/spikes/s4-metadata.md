@@ -202,9 +202,10 @@ Done by the maintainer on the Windows benchmark machine, in a Developer PowerShe
 2. XMP edits through `xmp_toolkit`; GPano fields kept consistent with the exported size; heading via
    `GPano:PoseHeadingDegrees`.
 3. Export changes only: Software, dimensions (EXIF PixelX/YDimension, XMP `tiff:`/`exif:` sizes, GPano
-   sizes), heading when the user changes it; drops editor documents; regenerates or drops thumbnails
-   (decision pending).
-4. sRGB conversion with `moxcms` (float); `lcms2` double precision as reference in tests.
+   sizes), heading when the user changes it, modification dates; regenerates thumbnails; drops editor
+   documents (decisions M1–M2 in round 9).
+4. sRGB conversion with `moxcms` (float); `lcms2` double precision as reference in tests. Embedded
+   profile `sRGB-v2-micro` for 8-bit, `sRGB-v4` for 16-bit exports (decision M3).
 5. Round-trip tests with exiftool diff in CI on the synthetic suite (no private data needed).
 
 ## How to reproduce

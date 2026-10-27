@@ -1,6 +1,7 @@
 # ADR-0005: Metadata round trip and colour conversion
 
-- Status: Proposed – recommendation from [spike S4](../spikes/s4-metadata.md) (macOS; Windows build checked)
+- Status: Proposed – recommendation from [spike S4](../spikes/s4-metadata.md) (macOS + Windows build checked, maintainer-reviewed); product questions answered in
+  [decision round 9](../05-decisions.md); ready to be accepted
 - Date: 2026-10-27
 
 ## Context
@@ -27,12 +28,16 @@
    - the software tag;
    - the dimensions (EXIF `PixelX/YDimension`; XMP `tiff:`/`exif:` sizes and GPano `FullPano*` /
      `CroppedArea*`, all scaled with the image);
-   - `GPano:PoseHeadingDegrees` when the user changes the heading.
+   - `GPano:PoseHeadingDegrees` when the user changes the heading;
+   - the modification dates (`ModifyDate`, `xmp:ModifyDate`, `xmp:MetadataDate`); capture dates stay;
+   - the EXIF IFD1 thumbnail and the Photoshop thumbnail resource (0x040C), regenerated from the
+     edited image.
 4. **Editor documents are dropped on export:** Photoshop `ImageSourceData` (37724) and Affinity
-   (51168/51169) describe the pre-edit image. Stale thumbnails: see open points.
+   (51168/51169) describe the pre-edit image.
 5. **Colour conversion with `moxcms` in floating-point mode** (pure Rust, BSD-3/Apache), used for
    export presets that convert to sRGB. `lcms2` (Little CMS, MIT) at double precision serves as the
-   reference in tests.
+   reference in tests. Embedded sRGB profile: compact v2 `sRGB-v2-micro` for 8-bit exports (viewer
+   compatibility), `sRGB-v4` for 16-bit exports (both CC0, from Compact-ICC-Profiles).
 6. **Round-trip tests** in CI: `exiftool` diff on synthetic files with full metadata, plus TIFF pixel
    equality.
 
@@ -58,11 +63,6 @@
 
 ## Open points
 
-- **Thumbnails:** the EXIF IFD1 thumbnail and the Photoshop thumbnail resource (0x040C) show the pre-edit
-  image. Regenerate them from the pyramid, or drop them? (Product decision, E1.6.)
-- **Date fields on export:** update `ModifyDate` / `xmp:MetadataDate`, or keep them? (Product decision.)
-- **sRGB profile for web presets:** Little CMS's built-in v4 profile, or a compact v2 sRGB profile for
-  maximum viewer compatibility?
 - **ExtendedXMP** (JPEG XMP > 64 KB) and **MakerNote** offsets: not present in the test data; handle in E1.6
   (keep MakerNote blocks at their offset / copy the EXIF block unchanged when no EXIF field changes).
 - Display-side colour management (monitor profile in the webview) – viewer epic.

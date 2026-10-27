@@ -119,3 +119,11 @@ document they were carried into. Architecture decisions live in the [ADRs](adr/)
 | Z3 | Execution provider | CPU on macOS and Windows (CoreML slower, DirectML fails on LaMa). | ADR-0004 |
 | Z4 | Required before shipping | Less repetitive texture pass; invisible boundary (gradient-domain blending, irregular mask edge instead of a perfect circle). | spike report, ADR-0004 |
 
+## Round 9 – Spike S4 results (2026-10-27)
+
+| # | Topic | Decision | Carried into |
+| --- | --- | --- | --- |
+| M1 | Stale thumbnails | Regenerate the EXIF IFD1 thumbnail and the Photoshop thumbnail resource (0x040C) from the edited image on export. | [ADR-0005](adr/0005-metadata-and-colour-conversion.md), roadmap E1.6 |
+| M2 | Date fields on export | Update `ModifyDate` and `xmp:MetadataDate`/`xmp:ModifyDate` – the export is a changed image. Capture dates stay untouched. | ADR-0005 |
+| M3 | sRGB profile for web/Street View presets | 8-bit exports embed the compact v2 profile `sRGB-v2-micro` (456 bytes, CC0, [Compact-ICC-Profiles](https://github.com/saucecontrol/Compact-ICC-Profiles)) for maximum viewer compatibility; 16-bit sRGB exports embed `sRGB-v4` (480 bytes, exact parametric curve). Profiles ship as files in the repo. | ADR-0005, architecture §4.10 |
+

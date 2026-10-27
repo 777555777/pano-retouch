@@ -12,7 +12,7 @@ Status values: `Proposed` → `Accepted` | `Rejected` | `Superseded`.
 | [0002](0002-non-destructive-edit-stack.md) | Non-destructive edit stack in spherical coordinates | Accepted |
 | [0003](0003-tiled-image-pipeline.md) | Tiled image pipeline and working format | Accepted |
 | [0004](0004-local-ai-inpainting-onnx.md) | Local AI inpainting via ONNX Runtime | Proposed (spike S3) |
-| [0005](0005-metadata-and-colour-conversion.md) | Metadata round trip and colour conversion | Proposed (spike S4) |
+| [0005](0005-metadata-and-colour-conversion.md) | Metadata round trip and colour conversion | Proposed (spike S4, ready to be accepted) |
 
 ## Template
 

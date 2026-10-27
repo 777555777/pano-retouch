@@ -206,7 +206,8 @@ Principle: **users don't need to understand colour spaces – the software does 
   Adobe RGB images look wrongly saturated on P3 displays.
 - **Operations** that blend (feather, heal, shadow lighten) compute linearised in the source colour space.
 - **Inpainting:** input to the model as 8-bit sRGB (converted), result back into the source colour space.
-- **Export:** the source profile is kept. Web/Street View presets convert to sRGB.
+- **Export:** the source profile is kept. Web/Street View presets convert to sRGB and embed the compact
+  `sRGB-v2-micro` profile (8-bit) or `sRGB-v4` (16-bit) – decision M3.
 - Conversions (export presets) with `moxcms` in floating-point mode, `lcms2` double precision as the test
   reference (spike S4: both libraries' fast 16-bit defaults deviate by up to 6–12 code values). Query the monitor profile from the OS (check in the spike how reliably this
   works in the webview).
