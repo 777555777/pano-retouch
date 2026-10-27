@@ -1,6 +1,6 @@
 # ADR-0005: Metadata round trip and colour conversion
 
-- Status: Proposed – recommendation from [spike S4](../spikes/s4-metadata.md) (macOS; Windows build check open)
+- Status: Proposed – recommendation from [spike S4](../spikes/s4-metadata.md) (macOS; Windows build checked)
 - Date: 2026-10-27
 
 ## Context
@@ -51,8 +51,8 @@
 
 - ~600 lines of own, well-tested metadata code, the same approach PhotoCraft takes. No dependency on
   a typed EXIF library.
-- One C++ build dependency (`xmp_toolkit`) – Windows/Linux builds must be verified (Windows check
-  pending from the spike).
+- One C++ build dependency (`xmp_toolkit`); it builds with MSVC on Windows (checked in the spike), the
+  Linux build is verified with S5.
 - Export code must keep GPano consistent with every size change (presets, crops later).
 - Architecture §2 (stack), §4.9 (export) and §4.10 (colour management) are updated accordingly.
 

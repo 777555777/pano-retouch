@@ -3,7 +3,7 @@
 - Issue: [#4](https://github.com/777555777/pano-retouch/issues/4)
 - Date: 2026-10-27
 - Code: branch `spike/s4-metadata`, folder `spikes/s4-metadata/` (throw-away)
-- Machine: MacBook Pro M4 Max (all numbers below); Windows build check: see "Not covered / open"
+- Machine: MacBook Pro M4 Max (all numbers below unless noted); Windows build check: see "Windows check"
 - Result: **yes** – with a small own metadata layer on top of the image crates; ADR proposal
   [ADR-0005](../adr/0005-metadata-and-colour-conversion.md)
 
@@ -146,7 +146,7 @@ care (PhotoCraft) do what this spike does.
 | Crate | Licence | Verdict |
 | --- | --- | --- |
 | Own raw IFD/segment layer (spike `ifd.rs`, `meta.rs`) | ours | **Use.** Lossless by construction, works for JPEG, TIFF, BigTIFF and cross-format, integrates with the `tiff` encoder. |
-| `xmp_toolkit` 1.12 (Adobe XMP Toolkit, C++) | MIT/Apache-2.0, SDK BSD-3-Clause | **Use for XMP edits.** Robust against all XMP serialisations; rewrites the packet (values preserved, `XMPToolkit` changes). +9 s clean build on the Mac; Windows build to be confirmed. |
+| `xmp_toolkit` 1.12 (Adobe XMP Toolkit, C++) | MIT/Apache-2.0, SDK BSD-3-Clause | **Use for XMP edits.** Robust against all XMP serialisations; rewrites the packet (values preserved, `XMPToolkit` changes). +9 s clean build on the Mac; builds with MSVC on Windows. |
 | XMP text patch (spike) | ours | Byte-preserving but fragile: failed on ExifTool-style packets (single quotes, element form) until fixed. Not for the product. |
 | `little_exif` 0.6 | MIT/Apache-2.0 | Works on JPEG (all fields kept here), but re-parses and rewrites the whole file, writing "only works for JPGs", typed tag API. Not needed. |
 | `kamadak-exif` 0.6 | BSD-2-Clause | Reader only (+ experimental writer); useful for **displaying** EXIF in the info panel. |
@@ -174,9 +174,18 @@ All licences are compatible with AGPL-3.0.
 6. **Test data corrections:** set C (Insta360) **contains GPS** (06-test-data said "no GPS"); the set A
    EXR's chromaticities are **Adobe RGB** primaries (not Rec.709).
 
+## Windows check
+
+Done by the maintainer on the Windows benchmark machine, in a Developer PowerShell for VS:
+
+- `cargo build --release` succeeds with MSVC, including `xmp_toolkit` (C++) and `lcms2-sys` (C).
+- `cargo test --release`: 3/3 passed (both XMP engines, including the Adobe XMP Toolkit at runtime).
+- `icc` on the set C JPEG (Display P3, 71 MP) gives the same deviations as on the Mac: `lcms2` default
+  8-bit max 7, `moxcms` (fixed point, the spike default) 8-bit max 1. Speed 837 MP/s (`lcms2`) and
+  760 MP/s (`moxcms` fixed point).
+
 ## Not covered / open
 
-- **Windows build** of `xmp_toolkit` (C++) and `lcms2-sys` (C) with MSVC – commands in the spike README.
 - **ExtendedXMP** (packets > 64 KB in JPEG): none in the test data; `xmp_toolkit`'s file API handles
   it, the segment writer must split/merge it.
 - **MakerNotes**: relocating EXIF can break maker-specific offsets. Stitched panoramas in the test data
