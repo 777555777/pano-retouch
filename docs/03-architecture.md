@@ -28,9 +28,9 @@ What shapes the architecture:
 | Viewer/rendering | **WebGPU** (evaluate WebGL2 fallback) in the webview | Sphere rendering, brush preview, overlays on the GPU. |
 | Compute core | **Rust** (workspace with several crates) | Performance, memory safety, good image/parallel libraries (`rayon`). |
 | Image I/O | `image`, `tiff`, `zune-jpeg` / `jpeg-encoder` or mozjpeg, `exr` | Pure Rust preferred; check JPEG encoder quality in the spike. |
-| Colour management | `lcms2` (Rust bindings for Little CMS) | Handle ICC profiles correctly. |
+| Colour management | `moxcms` (pure Rust, floating-point mode); `lcms2` as test reference | Handle ICC profiles correctly; ≤ 1 code value off a double-precision reference at 1.7–6.4 GP/s (spike S4). → [ADR-0005](adr/0005-metadata-and-colour-conversion.md) |
 | Vector graphics | `resvg` | Rasterise SVG logos for patch assets at any target resolution (R-13). |
-| Metadata | XMP/EXIF library (evaluate candidates in the spike, e.g. `xmp_toolkit`, `little_exif`, `kamadak-exif`) | Lossless EXIF/XMP/GPano round trip is mandatory. |
+| Metadata | Own raw-payload layer (EXIF directories as bytes, XMP, ICC, IPTC, Photoshop resources) + `xmp_toolkit` for XMP edits | Lossless EXIF/XMP/GPano round trip is mandatory; no crate does "copy everything, change three fields" (spike S4). → [ADR-0005](adr/0005-metadata-and-colour-conversion.md) |
 | AI inference | `ort` (ONNX Runtime for Rust) | Cross-platform, GPU providers (CoreML, DirectML, CUDA). |
 | Inpainting model | e.g. LaMa / Big-LaMa, MI-GAN (as ONNX) | Proven for object removal; check licences. → [ADR-0004](adr/0004-local-ai-inpainting-onnx.md) |
 | Optional GPU compute in the core | `wgpu` | If the CPU pipeline for brushes/resampling is too slow (later). |
@@ -188,7 +188,11 @@ exports may live anywhere (internal/external SSD, NAS); the cache always stays l
 
 - Full-resolution composition tile by tile (streaming) to save RAM.
 - TIFF > 4 GB as **BigTIFF**; EXR with selectable compression (lossless: ZIP/PIZ; lossy: DWAA/DWAB) and half/float.
-- Copy the original's metadata; adjust: software tag, dimensions, heading (if changed), keep GPano fields consistent.
+- Copy the original's metadata as raw payloads; adjust: software tag, dimensions (EXIF, XMP `tiff:`/`exif:`,
+  GPano sizes), heading (`GPano:PoseHeadingDegrees`, if changed). Drop editor documents (Photoshop 37724,
+  Affinity 51168/51169). TIFF → JPEG moves IPTC into the Photoshop resource. Details: [ADR-0005](adr/0005-metadata-and-colour-conversion.md).
+- The `tiff` encoder compresses strips on one thread (283 MP Deflate: 50 s in spike S4) → compress strips in
+  parallel and write them in order.
 - Configurable JPEG quality; selectable chroma subsampling (4:4:4 for high quality).
 
 ### 4.10 Colour management
@@ -203,7 +207,8 @@ Principle: **users don't need to understand colour spaces – the software does 
 - **Operations** that blend (feather, heal, shadow lighten) compute linearised in the source colour space.
 - **Inpainting:** input to the model as 8-bit sRGB (converted), result back into the source colour space.
 - **Export:** the source profile is kept. Web/Street View presets convert to sRGB.
-- Implemented with `lcms2`; query the monitor profile from the OS (check in the spike how reliably this
+- Conversions (export presets) with `moxcms` in floating-point mode, `lcms2` double precision as the test
+  reference (spike S4: both libraries' fast 16-bit defaults deviate by up to 6–12 code values). Query the monitor profile from the OS (check in the spike how reliably this
   works in the webview).
 
 ### 4.11 Decoding large files (findings from the test data)

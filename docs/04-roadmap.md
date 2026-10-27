@@ -47,7 +47,9 @@ with throw-away code. Outcome of each spike: a short report + ADR update.
 - **E1.3 Image I/O & tiling:** read JPEG/TIFF/BigTIFF/EXR, fast first preview, pyramid, tile cache (RAM + central disk cache), thumbnails, colour management, alpha.
 - **E1.4 Viewer:** sphere view, flat view, navigation, quick jumps, HDR exposure slider (UX per [08-ux-concept.md](08-ux-concept.md)).
 - **E1.5 Folder project & app shell:** open folder, filmstrip, image switching, header, collapsible panels, command palette.
-- **E1.6 Export:** lossless export (initially without edits) preserving metadata, export presets.
+- **E1.6 Export:** lossless export (initially without edits) preserving metadata, export presets. Metadata layer
+  and colour conversion as in [ADR-0005](adr/0005-metadata-and-colour-conversion.md); exiftool round-trip tests on
+  synthetic files in CI; parallel TIFF strip compression.
 
 ## M2 – Layers & nadir patch (release 0.1)
 
