@@ -5,8 +5,8 @@ performance benchmarks.
 
 ## 1. Maintainer's local test data (`testdata-local/`, not in Git)
 
-These sets stay **local only** (they show private locations). Analysed on 2026-10-11. No image
-contains GPS data. Agents working on the maintainer's machine can use them via `PANO_TESTDATA`
+These sets stay **local only** (they show private locations). Analysed on 2026-10-11. Only set C
+contains GPS data (found in spike S4) – never publish its values. Agents working on the maintainer's machine can use them via `PANO_TESTDATA`
 (see section 4); in CI and for other contributors they are not available.
 
 ### Set A – Sony A7R4 + Sigma 14 mm (`Pano_A7R4-Sigma-14mm/`) – "the big one"
@@ -18,9 +18,9 @@ a green spirit level at the edge; cleanly filled with snow in the edited version
 | --- | --- | --- |
 | `Edit/_DSC5395_8bit Panorama.tif` | TIFF, **8-bit** RGBA (associated alpha), LZW + predictor, strips of 105 rows, 450 MB | PTGui 12.27, **Adobe RGB (1998)**, alpha = hole at the nadir |
 | `Edit/_DSC5395_16bit Panorama.tif` | identical to the 8-bit file: **also only 8-bit** | see note below |
-| `Edit/_DSC5395 Panorama edited.tif` | TIFF, 8-bit RGBA, Deflate, 1 row per strip, 960 MB | edited with **Affinity 3.0.2**, Adobe RGB |
+| `Edit/_DSC5395 Panorama edited.tif` | TIFF, 8-bit RGBA, Deflate, 1 row per strip, 960 MB | edited with **Affinity 3.0.2**, Adobe RGB; carries the 535 MB Affinity document in private tags 51168/51169 |
 | `Edit/_DSC5395 Panorama edited.jpg` | JPEG baseline, 4:4:4, **no restart markers**, 67 MB | Adobe RGB, full GPano fields |
-| `Edit/_DSC5395 Panorama_hdr.exr` | EXR, RGBA **half**, PIZ, scanlines, 828 MB | chromaticities = Rec.709/sRGB primaries |
+| `Edit/_DSC5395 Panorama_hdr.exr` | EXR, RGBA **half**, PIZ, scanlines, 828 MB | chromaticities = **Adobe RGB** primaries, D65 white (linear) |
 | `Edit/_DSC5395 Panorama_hdr.hdr` | Radiance RGBE 32-bit, 1.1 GB | PTGui |
 | `Edit-2/_DSC5395 Panorama 16bit.tif` | TIFF, **true 16-bit** RGBA, LZW, strips of 52 rows, **1.7 GB**, 23800×11900 | **ProPhoto RGB**, re-stitched from 16-bit sources |
 | `Edit-2/_DSC5395 Panorama 8bit.tif` | TIFF, 8-bit RGBA, LZW, 387 MB, 23800×11900 | ProPhoto RGB; 8-bit counterpart (8-bit + ProPhoto tends to banding – good test for correct display) |
